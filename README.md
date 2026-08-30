@@ -37,6 +37,14 @@ For the anonymous real-survey answer workbook used in local smoke tests, run:
 
 The real-survey parser keeps the 20 answer texts but does not invent legacy labels. It excludes a whole participant when Q20 parses to a number outside the documented `0--10` range (including the observed `30`, `70`, and `80` entries), hashes source response IDs, and writes a local-only manifest with the included/excluded counts. The raw workbook and derived real-survey responses are ignored by Git and must not be uploaded to production.
 
+To run the non-persistent scorer smoke test over that filtered set:
+
+```bash
+.venv/bin/python scripts/smoke_real_survey.py
+```
+
+It prints aggregate status/safety counts only and never writes to the runtime audit database.
+
 The raw spreadsheet and document are intentionally excluded from version
 control because they contain sensitive response material. Place approved source
 copies in `data/raw/` on a research workstation before running the dataset
