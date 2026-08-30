@@ -54,6 +54,12 @@ type GlobalEvidenceState = {
   seed_total: number
   seed_answered: number
   probe_count: number
+  burden?: {
+    max_session_probes?: number
+    used_probes?: number
+    remaining_probe_budget?: number
+    interruption_rate?: number
+  }
   constructs: Array<Record<string, unknown>>
   nodes: Array<Record<string, unknown>>
   cross_item_links: Array<Record<string, unknown>>
@@ -163,6 +169,7 @@ function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [nextAction, setNextAction] = useState<NextAction>({ type: 'CONTINUE_SEED' })
   const [globalEvidence, setGlobalEvidence] = useState<GlobalEvidenceState | null>(null)
+  const [completionHandoff, setCompletionHandoff] = useState(false)
   const [researchToken, setResearchToken] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('research_access_token') ?? '' : '')
   const [researchTokenDraft, setResearchTokenDraft] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('research_access_token') ?? '' : '')
   const [researchReady, setResearchReady] = useState(false)
@@ -257,7 +264,9 @@ function App() {
       setNextAction(action)
       setResult(next)
       setSubmitted((prev) => ({ ...prev, [question.id]: next }))
-      if (sessionId && action.question_id && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(action.type) && action.question_id !== question.id) {
+      const seedFinished = Number(payload.global_evidence?.seed_answered ?? 0) >= questions.length
+      if (seedFinished) setCompletionHandoff(true)
+      if (sessionId && !seedFinished && action.question_id && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(action.type) && action.question_id !== question.id) {
         const targetIndex = questions.findIndex((item) => item.id === action.question_id)
         if (targetIndex >= 0) {
           setSelected(targetIndex)
@@ -295,6 +304,7 @@ function App() {
     setResult(null)
     setSubmitted({})
     setGlobalEvidence(null)
+    setCompletionHandoff(false)
     setNextAction({ type: 'CONTINUE_SEED' })
     setErrorMessage('')
     await new Promise((resolve) => window.setTimeout(resolve, 760))
@@ -317,6 +327,7 @@ function App() {
   }
 
   const selectQuestion = (index: number) => {
+    if (safetyFlowActive) return
     const item = questions[index]
     setSelected(index)
     setResult(null)
@@ -325,7 +336,30 @@ function App() {
     setErrorMessage('')
     navigate('assessment')
   }
+  const continueAfterCompletion = () => {
+    setCompletionHandoff(false)
+    if (!safetyFlowActive && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type) && nextAction.question_id) {
+      const targetIndex = questions.findIndex((item) => item.id === nextAction.question_id)
+      if (targetIndex >= 0) {
+        const target = questions[targetIndex]
+        setSelected(targetIndex)
+        setResult(submitted[target.id] ?? null)
+        setResponse(submitted[target.id]?.response ?? '')
+        setClarification('')
+        setErrorMessage('')
+        navigate('assessment')
+        return
+      }
+    }
+    navigate('assessment')
+  }
   const nextQuestion = () => {
+    if (safetyFlowActive) return
+    const seedFinished = answered >= questions.length || Number(globalEvidence?.seed_answered ?? 0) >= questions.length
+    if (selected >= questions.length - 1 && seedFinished) {
+      navigate('complete')
+      return
+    }
     if (['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type) && nextAction.question_id) {
       const targetIndex = questions.findIndex((item) => item.id === nextAction.question_id)
       if (targetIndex >= 0 && targetIndex !== selected) {
@@ -336,7 +370,10 @@ function App() {
     if (selected >= questions.length - 1) navigate('complete')
     else selectQuestion(selected + 1)
   }
-  const openView = (nextView: View) => navigate(nextView)
+  const openView = (nextView: View) => {
+    if (nextView === 'assessment') setCompletionHandoff(false)
+    navigate(nextView)
+  }
   const unlockResearch = () => {
     const value = researchTokenDraft.trim()
     if (typeof window !== 'undefined') {
@@ -365,10 +402,10 @@ function App() {
         </div>
       </header>
       {screen === 'welcome' && <WelcomeView onStart={startAssessment} />}
-      {screen === 'complete' && <CompletionView answered={answered} submitted={submitted} onContinue={() => navigate('assessment')} onReplay={() => openView('replay')} />}
+      {screen === 'complete' && <CompletionView answered={answered} submitted={submitted} globalEvidence={globalEvidence} nextAction={nextAction} onContinue={continueAfterCompletion} onEvidence={() => openView('evidence')} onReplay={() => openView('replay')} />}
       {screen === 'assessment' && <div className={`workspace ${participantView ? 'participant-workspace' : 'research-workspace'}`}>
         {participantView && <ParticipantAtmosphere />}
-        {participantView && <QuestionDirectory questions={questions} selected={selected} answered={answered} submitted={submitted} onSelect={selectQuestion} />}
+        {participantView && <QuestionDirectory questions={questions} selected={selected} answered={answered} submitted={submitted} onSelect={selectQuestion} disabled={safetyFlowActive} />}
         <section className="main-panel">
           <nav className="view-tabs" aria-label="页面导航">
             <div className="participant-tabs">
@@ -379,7 +416,7 @@ function App() {
               {([['research', '研究台'], ['review', '专家工作']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
             </div>
           </nav>
-          {view === 'assessment' && <ParticipantFlow initialStage="question" onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
+          {view === 'assessment' && <ParticipantFlow initialStage="question" suppressProbe={completionHandoff} onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
           {view === 'evidence' && <EvidenceView question={question} result={currentResult} response={response} globalEvidence={globalEvidence} />}
           {view === 'research' && <ResearchView summary={summary} distribution={scoreDistribution} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'review' && <ReviewView cases={cases} token={researchToken} onReviewed={refreshReviewCases} onLoadMore={loadMoreReviewCases} hasMore={reviewHasMore} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
@@ -390,7 +427,7 @@ function App() {
   )
 }
 
-function QuestionDirectory({ questions, selected, answered, submitted, onSelect }: { questions: Question[]; selected: number; answered: number; submitted: Record<string, ScoreResult>; onSelect: (index: number) => void }) {
+function QuestionDirectory({ questions, selected, answered, submitted, onSelect, disabled = false }: { questions: Question[]; selected: number; answered: number; submitted: Record<string, ScoreResult>; onSelect: (index: number) => void; disabled?: boolean }) {
   const [hovered, setHovered] = useState(false)
   const [pinned, setPinned] = useState(false)
   const open = hovered || pinned
@@ -417,7 +454,7 @@ function QuestionDirectory({ questions, selected, answered, submitted, onSelect 
       <div className="directory-heading"><span>回答轨迹</span><strong>{answered.toString().padStart(2, '0')} / {questions.length}</strong><button className="directory-close" type="button" aria-label="收起答题目录" onClick={() => { setPinned(false); setHovered(false) }}>×</button></div>
       <div className="progress-track"><span style={{ width: `${questions.length ? (answered / questions.length) * 100 : 0}%` }} /></div>
       <div className="directory-list">
-        {questions.map((item, index) => <button key={item.id} title={`${item.id} · ${item.dimension}`} aria-label={`${item.id} ${item.dimension.split(' · ')[1] ?? item.dimension}${submitted[item.id] ? ' 已记录' : ''}`} className={`directory-item ${index === selected ? 'active' : ''} ${submitted[item.id] ? 'done' : ''}`} onClick={() => { onSelect(index); setPinned(false); setHovered(false) }}><span className="q-number">{item.id.slice(1)}</span><span className="directory-item-label">{item.dimension.split(' · ')[1] ?? item.dimension}</span>{submitted[item.id] && <span className="directory-item-check">✓</span>}</button>)}
+        {questions.map((item, index) => <button key={item.id} title={`${item.id} · ${item.dimension}`} aria-label={`${item.id} ${item.dimension.split(' · ')[1] ?? item.dimension}${submitted[item.id] ? ' 已记录' : ''}`} className={`directory-item ${index === selected ? 'active' : ''} ${submitted[item.id] ? 'done' : ''}`} disabled={disabled} onClick={() => { onSelect(index); setPinned(false); setHovered(false) }}><span className="q-number">{item.id.slice(1)}</span><span className="directory-item-label">{item.dimension.split(' · ')[1] ?? item.dimension}</span>{submitted[item.id] && <span className="directory-item-check">✓</span>}</button>)}
       </div>
       <div className="directory-hint"><span>♡</span> 随时回到某一题</div>
     </aside>
@@ -662,9 +699,26 @@ function WelcomeView({ onStart }: { onStart: () => void }) {
   </section>
 }
 
-function CompletionView({ answered, submitted, onContinue, onReplay }: { answered: number; submitted: Record<string, ScoreResult>; onContinue: () => void; onReplay: () => void }) {
-  const provisional = Object.values(submitted).filter((item) => item.score_status === 'PROVISIONAL').length
-  return <section className="completion-scene"><div className="completion-backdrop"><img src="/user-references/ref3.jpg" alt="抽象的安静旅程插画" /></div><div className="completion-overlay" /><div className="completion-inner"><div className="completion-kicker"><span className="landing-kicker-dot" /> 给自己留了一点时间</div><h1>谢谢你，<br /><em>让自己被听见。</em></h1><p>你写下的每一句，都被好好留在这里。</p><div className="completion-stats"><div><strong>{answered}</strong><span>完成</span></div><div><strong>{provisional}</strong><span>待确认</span></div><div><strong>20</strong><span>问题</span></div></div><div className="completion-actions"><button className="landing-primary" type="button" onClick={onReplay}>回看 <span>↗</span></button><button className="landing-secondary light" type="button" onClick={onContinue}>稍后 <span>→</span></button></div></div><div className="completion-corner">SESSION TRACE <span /> {new Date().getFullYear()}</div></section>
+function CompletionView({ answered, submitted, globalEvidence, nextAction, onContinue, onEvidence, onReplay }: { answered: number; submitted: Record<string, ScoreResult>; globalEvidence: GlobalEvidenceState | null; nextAction: NextAction; onContinue: () => void; onEvidence: () => void; onReplay: () => void }) {
+  const humanReview = Object.values(submitted).filter((item) => item.score_status === 'HUMAN_REVIEW').length
+  const unresolved = globalEvidence?.unresolved_gaps ?? []
+  const constructs = globalEvidence?.constructs ?? []
+  const safety = nextAction.type === 'SAFETY_FLOW' || Object.values(submitted).some((item) => item.safety_state !== 'CLEAR')
+  const summary = globalEvidence?.session_intelligence?.session_summary
+  const canContinueProbe = !safety && unresolved.length > 0 && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type) && Boolean(nextAction.question_id)
+  const headline = safety
+    ? '先停在这里，剩下的交给专业人员。'
+    : unresolved.length > 0
+      ? '20句话已经走完，还有几处值得再听听。'
+      : humanReview > 0
+        ? '20句话已经走完，有些地方先留给专业人员复核。'
+        : '20句话已经汇成一张证据地图。'
+  const detail = safety
+    ? '这次对话不会继续自动追问；如果你愿意，可以在专业人员陪伴下继续。'
+    : unresolved.length > 0
+      ? `小猫没有急着替你下结论，当前还有 ${unresolved.length} 个节点保留着自己的声音。`
+      : '每一条回答都留在会话里，之后可以回看它们怎样彼此照见。'
+  return <section className="completion-scene"><div className="completion-backdrop"><img src="/user-references/ref3.jpg" alt="抽象的安静旅程插画" /></div><div className="completion-overlay" /><div className="completion-inner"><div className="completion-kicker"><span className="landing-kicker-dot" /> SESSION EVIDENCE MAP</div><h1>谢谢你，<br /><em>让自己被听见。</em></h1><p>{headline}</p><div className="completion-stats"><div><strong>{answered}</strong><span>已记录</span></div><div><strong>{globalEvidence?.probe_count ?? 0}</strong><span>次靠近</span></div><div><strong>{unresolved.length}</strong><span>保留未决</span></div></div><div className="completion-session-card"><div className="completion-session-heading"><span className="box-kicker">整场评估的回声</span><span className="completion-session-status">{safety ? '专业流程' : unresolved.length ? '仍可求证' : humanReview ? '等待复核' : '已收束'}</span></div><p>{summary || detail}</p><div className="completion-constructs">{constructs.map((construct, index) => <div className="completion-construct" key={String(construct.id ?? index)}><div><strong>{String(construct.label ?? construct.id ?? '未分类')}</strong><span>{String(construct.status ?? 'UNANSWERED')}</span></div><small>{String(construct.answered ?? 0)} 题 · 证据 {Math.round(Number(construct.evidence_density ?? 0) * 100)}%</small><i><span style={{ width: `${Math.min(100, Number(construct.evidence_density ?? 0) * 100)}%` }} /></i></div>)}</div>{!safety && unresolved.length > 0 && <div className="completion-unresolved"><span className="box-kicker">下一步</span><span>可以再靠近一处，也可以先把整场地图收好。</span></div>}</div><div className="completion-actions"><button className="landing-primary" type="button" onClick={canContinueProbe ? onContinue : onEvidence}>{canContinueProbe ? '继续靠近一处' : '看整场地图'} <span>↗</span></button><button className="landing-secondary light" type="button" onClick={onReplay}>回看回答 <span>↺</span></button><button className="landing-secondary light" type="button" onClick={canContinueProbe ? onEvidence : onContinue}>{canContinueProbe ? '先收好地图' : '稍后'} <span>→</span></button></div></div><div className="completion-corner">SESSION TRACE <span /> {globalEvidence ? `${globalEvidence.seed_answered} / ${globalEvidence.seed_total}` : `${answered} / 20`}</div></section>
 }
 
 function AssessmentView({ question, selected, response, setResponse, result, clarification, setClarification, runScore, loading, onNext }: { question: Question; selected: number; response: string; setResponse: (v: string) => void; result?: ScoreResult; clarification: string; setClarification: (v: string) => void; runScore: (text?: string, isClarification?: boolean) => void; loading: boolean; onNext: () => void }) {
@@ -675,7 +729,8 @@ function ScorePanel({ result }: { result?: ScoreResult }) {
   if (!result) return <aside className="score-companion" data-oneko-region aria-label="等待第一句回答">
     <span className="score-companion-anchor" data-oneko-anchor aria-hidden="true" />
   </aside>
-  return <aside className={`score-panel score-panel-${result.score_status.toLowerCase()}`}><div className="panel-top"><span className="box-kicker">我对这句话的暂时理解</span><span className={`state-label ${result.score_status.toLowerCase()}`}>{result.score_status === 'CONFIRMED' ? '比较清楚' : '还想确认'}</span></div><div className="score-display"><ScorePill score={result.preliminary_score} /><strong>{scoreLabels[result.preliminary_score].split(' · ')[1]}</strong></div><div className="confidence-row"><span>理解的把握</span><strong>{Math.round(result.confidence * 100)}%</strong><div className="confidence-bar"><span style={{ width: `${result.confidence * 100}%` }} /></div></div><div className="panel-rule" /><span className="box-kicker">我为什么这样理解</span><p className="rationale">{result.rationale}</p><div className="evidence-status"><span className={result.evidence_sufficiency === 'SUFFICIENT' ? 'check' : 'warning'}>{result.evidence_sufficiency === 'SUFFICIENT' ? '✓' : '!'}</span><span>{result.evidence_sufficiency === 'SUFFICIENT' ? '这句话的信息够清楚了' : '我不想替你脑补'}</span></div>{result.safety_state !== 'CLEAR' && <div className="safety-alert">我会先把这句话交给专业人员，不继续自动追问。</div>}<button className="text-button" type="button">看看我读到的依据 <span>↗</span></button>{result.model && <span className="model-note">由 {result.model} 辅助理解</span>}</aside>
+  const label = result.safety_state !== 'CLEAR' ? '先停一下' : result.score_status === 'CONFIRMED' ? '比较清楚' : result.score_status === 'HUMAN_REVIEW' ? '暂留复核' : '还想确认'
+  return <aside className={`score-panel score-panel-${result.score_status.toLowerCase()}`}><div className="panel-top"><span className="box-kicker">我对这句话的暂时理解</span><span className={`state-label ${result.score_status.toLowerCase()}`}>{label}</span></div><div className="score-display"><ScorePill score={result.preliminary_score} /><strong>{scoreLabels[result.preliminary_score].split(' · ')[1]}</strong></div><div className="confidence-row"><span>理解的把握</span><strong>{Math.round(result.confidence * 100)}%</strong><div className="confidence-bar"><span style={{ width: `${result.confidence * 100}%` }} /></div></div><div className="panel-rule" /><span className="box-kicker">我为什么这样理解</span><p className="rationale">{result.rationale}</p><div className="evidence-status"><span className={result.evidence_sufficiency === 'SUFFICIENT' ? 'check' : 'warning'}>{result.evidence_sufficiency === 'SUFFICIENT' ? '✓' : '!'}</span><span>{result.evidence_sufficiency === 'SUFFICIENT' ? '这句话的信息够清楚了' : '我不想替你脑补'}</span></div>{result.safety_state !== 'CLEAR' && <div className="safety-alert">我会先把这句话交给专业人员，不继续自动追问。</div>}<button className="text-button" type="button">看看我读到的依据 <span>↗</span></button>{result.model && <span className="model-note">由 {result.model} 辅助理解</span>}</aside>
 }
 
 function EvidenceView({ question, result, response, globalEvidence }: { question: Question; result?: ScoreResult; response: string; globalEvidence: GlobalEvidenceState | null }) {

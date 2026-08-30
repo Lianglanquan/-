@@ -64,6 +64,8 @@ type ParticipantFlowProps = {
   runScore: (text?: string, isClarification?: boolean, probeType?: string | null, probeOptionId?: string | null, probeAction?: 'ANSWER' | 'PAUSE') => void
   loading: boolean
   errorMessage?: string
+  /** After the final Seed Probe, let the participant see the session handoff first. */
+  suppressProbe?: boolean
   onNext: () => void
   /** When embedded in App, let the host own the existing completion screen. */
   onComplete?: () => void
@@ -106,6 +108,7 @@ export function ParticipantFlow({
   runScore,
   loading,
   errorMessage,
+  suppressProbe = false,
   onNext,
   onComplete,
   initialStage = 'welcome',
@@ -137,7 +140,7 @@ export function ParticipantFlow({
   // provisional result moves to its one-question clarification page.
   useEffect(() => {
     if (!started) return
-    const shouldProbeNow = ['PROVISIONAL', 'HUMAN_REVIEW'].includes(result?.score_status ?? '') && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction?.type ?? '') && (!nextAction?.question_id || nextAction.question_id === question.id)
+    const shouldProbeNow = !suppressProbe && ['PROVISIONAL', 'HUMAN_REVIEW'].includes(result?.score_status ?? '') && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction?.type ?? '') && (!nextAction?.question_id || nextAction.question_id === question.id)
     if (shouldProbeNow) {
       setStage('clarification')
       return
@@ -145,11 +148,11 @@ export function ParticipantFlow({
     if (stage !== 'completion') setStage('question')
     // Only values that identify a new result/seed probe should affect stage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, result?.score_status, nextAction?.type, nextAction?.question_id, started])
+  }, [selected, result?.score_status, nextAction?.type, nextAction?.question_id, started, suppressProbe])
 
   const start = () => {
     setStarted(true)
-    const shouldProbeNow = ['PROVISIONAL', 'HUMAN_REVIEW'].includes(result?.score_status ?? '') && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction?.type ?? '')
+    const shouldProbeNow = !suppressProbe && ['PROVISIONAL', 'HUMAN_REVIEW'].includes(result?.score_status ?? '') && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction?.type ?? '')
     setStage(shouldProbeNow ? 'clarification' : 'question')
   }
 
@@ -195,6 +198,7 @@ export function ParticipantFlow({
       setResponse={setResponse}
       result={result}
       nextAction={nextAction}
+      suppressProbe={suppressProbe}
       loading={loading}
       errorMessage={errorMessage}
       onSubmit={() => runScore()}
@@ -236,6 +240,7 @@ function QuestionPage({
   setResponse,
   result,
   nextAction,
+  suppressProbe,
   loading,
   onSubmit,
   onNext,
@@ -248,6 +253,7 @@ function QuestionPage({
   setResponse: (value: string) => void
   result?: ParticipantScoreResult
   nextAction?: ParticipantNextAction
+  suppressProbe?: boolean
   loading: boolean
   onSubmit: () => void
   onNext: () => void
@@ -277,7 +283,7 @@ function QuestionPage({
               {loading ? '读一读…' : '继续'} <span>→</span>
             </button>
           </div>
-          {result && !(nextAction?.question_id === question.id && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type)) && (
+          {result && result.safety_state === 'CLEAR' && !(suppressProbe !== true && nextAction?.question_id === question.id && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type)) && (
             <div className="next-row">
               <button className="ghost-button" type="button" onClick={onNext}>
                 {selected >= totalQuestions - 1 ? '完成' : '下一句'} <span>→</span>
@@ -402,17 +408,28 @@ function ScorePanel({ result }: { result?: ParticipantScoreResult }) {
       </aside>
     )
   }
+  const safetyGated = result.safety_state !== 'CLEAR'
+  const humanReview = result.score_status === 'HUMAN_REVIEW'
+  const label = safetyGated ? '先停一下' : humanReview ? '暂留复核' : result.score_status === 'PROVISIONAL' ? '还想确认' : '继续'
+  const headline = safetyGated ? '我会先停在这里。' : humanReview ? '这句话我先不替你定下来。' : result.score_status === 'PROVISIONAL' ? '我还缺一点信息。' : '你可以继续下一句。'
+  const detail = safetyGated
+    ? '这句话会进入预定义的专业评估流程。'
+    : humanReview
+      ? '你可以继续下一句；需要时再由专业人员回看。'
+      : result.score_status === 'PROVISIONAL'
+        ? '如果愿意，补充问题中的那一句；不需要猜我想听什么。'
+        : '评分细节不会在作答过程中展示，以免影响后面的回答。'
   return (
     <aside className={`score-panel score-panel-${result.score_status.toLowerCase()}`}>
       <div className="panel-top">
         <span className="box-kicker">这句话已记录</span>
-        <span className={`state-label ${result.score_status.toLowerCase()}`}>{result.score_status === 'HUMAN_REVIEW' ? '交给专业人员' : result.score_status === 'PROVISIONAL' ? '还想确认' : '继续'}</span>
+        <span className={`state-label ${result.score_status.toLowerCase()}`}>{label}</span>
       </div>
       <div className="score-companion-copy">
-        <strong>{result.safety_state !== 'CLEAR' ? '我会先停在这里。' : result.score_status === 'PROVISIONAL' ? '我还缺一点信息。' : '你可以继续下一句。'}</strong>
-        <p>{result.safety_state !== 'CLEAR' ? '这句话会进入预定义的专业评估流程。' : result.score_status === 'PROVISIONAL' ? '如果愿意，补充问题中的那一句；不需要猜我想听什么。' : '评分细节不会在作答过程中展示，以免影响后面的回答。'}</p>
+        <strong>{headline}</strong>
+        <p>{detail}</p>
       </div>
-      {result.safety_state !== 'CLEAR' && <div className="safety-alert">这句话需要专业人员一起看看。</div>}
+      {safetyGated && <div className="safety-alert">这句话需要专业人员一起看看。</div>}
     </aside>
   )
 }
