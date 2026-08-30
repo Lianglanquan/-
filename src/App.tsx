@@ -3,6 +3,7 @@ import MouseFollower from 'mouse-follower'
 import { gsap } from 'gsap'
 import 'mouse-follower/dist/mouse-follower.min.css'
 import ParticipantFlow from './components/participant/ParticipantFlow'
+import AuthFlow, { AuthUser } from './components/auth/AuthFlow'
 
 type Criterion = { score: number; description: string; examples: string[] }
 type Question = { id: string; question: string; dimension: string; criteria: Criterion[] }
@@ -175,10 +176,18 @@ function App() {
   const [researchReady, setResearchReady] = useState(false)
   const [researchLoading, setResearchLoading] = useState(false)
   const [entryTransition, setEntryTransition] = useState(false)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   useEffect(() => {
     fetch('/api/questions').then((res) => res.ok ? res.json() : Promise.reject()).then(setQuestions).catch(() => undefined)
     fetch('/api/provider').then((res) => res.ok ? res.json() : Promise.reject()).then(setProviderStatus).catch(() => undefined)
+
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => res.ok ? res.json() : Promise.reject())
+      .then((payload: { user?: AuthUser }) => setAuthUser(payload.user ?? null))
+      .catch(() => setAuthUser(null))
+      .finally(() => setAuthLoading(false))
 
     const syncRoute = () => {
       const next = routeState(routeFromHash())
@@ -193,15 +202,16 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!researchToken) {
+    const adminSession = authUser?.role === 'ADMIN'
+    if (!adminSession) {
       setResearchReady(false)
       return
     }
     setResearchLoading(true)
-    const headers = { 'X-Research-Token': researchToken }
+    const headers: Record<string, string> = researchToken ? { 'X-Research-Token': researchToken } : {}
     Promise.all([
-      fetch('/api/research/summary', { headers }).then((res) => res.ok ? res.json() : Promise.reject()),
-      fetch('/api/review/cases?limit=200&offset=0', { headers }).then((res) => res.ok ? res.json() : Promise.reject()),
+      fetch('/api/research/summary', { headers, credentials: 'include' }).then((res) => res.ok ? res.json() : Promise.reject()),
+      fetch('/api/review/cases?limit=200&offset=0', { headers, credentials: 'include' }).then((res) => res.ok ? res.json() : Promise.reject()),
     ]).then(([nextSummary, nextCases]) => {
       setSummary(nextSummary as ResearchSummary)
       setCases(nextCases)
@@ -211,11 +221,12 @@ function App() {
     }).catch(() => {
       setResearchReady(false)
     }).finally(() => setResearchLoading(false))
-  }, [researchToken])
+  }, [researchToken, authUser?.role])
 
   const refreshReviewCases = async () => {
-    if (!researchToken) return
-    const res = await fetch('/api/review/cases?limit=200&offset=0', { headers: { 'X-Research-Token': researchToken } })
+    if (authUser?.role !== 'ADMIN') return
+    const headers: Record<string, string> = researchToken ? { 'X-Research-Token': researchToken } : {}
+    const res = await fetch('/api/review/cases?limit=200&offset=0', { headers, credentials: 'include' })
     if (!res.ok) return
     const nextCases = await res.json() as Array<Record<string, unknown>>
     setCases(nextCases)
@@ -224,8 +235,9 @@ function App() {
   }
 
   const loadMoreReviewCases = async () => {
-    if (!researchToken || !reviewHasMore) return
-    const res = await fetch(`/api/review/cases?limit=200&offset=${reviewOffset}`, { headers: { 'X-Research-Token': researchToken } })
+    if (authUser?.role !== 'ADMIN' || !reviewHasMore) return
+    const headers: Record<string, string> = researchToken ? { 'X-Research-Token': researchToken } : {}
+    const res = await fetch(`/api/review/cases?limit=200&offset=${reviewOffset}`, { headers, credentials: 'include' })
     if (!res.ok) return
     const nextCases = await res.json() as Array<Record<string, unknown>>
     setCases((previous) => [...previous, ...nextCases])
@@ -250,7 +262,7 @@ function App() {
       const endpoint = sessionId ? `/api/assessment/${sessionId}/responses` : '/api/score'
       const requestText = text
       const requestBody = { question_id: question.id, response: requestText, ...(sessionId ? { clarification: isClarification, ...(requestedProbeType ? { probe_type: requestedProbeType } : {}), ...(probeOptionId ? { probe_option_id: probeOptionId } : {}), ...(isClarification ? { probe_action: probeAction } : {}) } : {}) }
-      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
+      const res = await fetch(endpoint, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
       if (!res.ok) {
         const body = await res.json().catch(() => null) as { detail?: unknown } | null
         const detail = typeof body?.detail === 'string' ? body.detail : `服务暂时没有接住这句话（${res.status}）`
@@ -280,7 +292,7 @@ function App() {
       // stateless local scorer: doing so would make the participant think the
       // cat heard them while leaving the audit chain incomplete. The local
       // fallback remains available only when a session could not be started.
-      if (sessionId) {
+      if (sessionId || authUser) {
         setErrorMessage(error instanceof Error ? error.message : '服务暂时不可用，请稍后再试。')
         return
       }
@@ -311,12 +323,14 @@ function App() {
     navigate('assessment')
     setEntryTransition(false)
     try {
-      const res = await fetch('/api/assessment/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'participant' }) })
-      if (res.ok) {
-        const payload = await res.json()
-        if (payload?.id) setSessionId(String(payload.id))
-      }
-    } catch { /* local session is still usable */ }
+      const res = await fetch('/api/assessment/start', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'participant' }) })
+      if (!res.ok) throw new Error('会话还没有准备好，请重新进入。')
+      const payload = await res.json()
+      if (payload?.id) setSessionId(String(payload.id))
+      else throw new Error('会话还没有准备好，请重新进入。')
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '会话还没有准备好，请重新进入。')
+    }
   }
 
   const navigate = (route: Route) => {
@@ -383,11 +397,21 @@ function App() {
     setResearchToken(value)
   }
 
+  const logout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)
+    setAuthUser(null)
+    setSessionId(null)
+    navigate('welcome')
+  }
+
   const participantView = view === 'assessment' || view === 'evidence' || view === 'replay'
   const participantSurface = screen === 'welcome' || (screen === 'assessment' && participantView)
   const playfulSurface = screen === 'welcome' || screen === 'complete' || (screen === 'assessment' && view === 'assessment')
   const safetyFlowActive = nextAction.type === 'SAFETY_FLOW' || (result?.safety_state !== undefined && result.safety_state !== 'CLEAR')
   const catPlayfulSurface = playfulSurface && !safetyFlowActive
+
+  if (authLoading) return <main className="auth-loading"><span>小猫正在把门打开…</span></main>
+  if (!authUser) return <AuthFlow onAuthenticated={setAuthUser} />
 
   return (
     <main className={`app-shell ${screen === 'welcome' ? 'landing-active' : ''} ${screen === 'assessment' && participantView ? 'participant-active' : ''}`}>
@@ -398,6 +422,7 @@ function App() {
         <button className="brand brand-button" type="button" data-cursor="-text" data-cursor-text="回到开始" onClick={() => navigate('welcome')}><span className="brand-mark">✳</span><span>听见自己</span><small>留一点时间给自己</small></button>
         <div className="topbar-actions">
           {screen === 'assessment' && <button className="header-quiet" type="button" data-cursor="-text" data-cursor-text="暂离" onClick={() => navigate('welcome')}>暂离</button>}
+          <button className="header-quiet auth-user-button" type="button" onClick={() => void logout()} title={authUser.email}>{authUser.role === 'ADMIN' ? '管理员 · 退出' : '退出'}</button>
           <div className="top-status"><span className="status-dot" /> 只留在这里 <span className="divider" /> <span className="ai-status">{providerStatus?.mode === 'llm' ? `AI 已连接 · ${providerStatus.model}${providerStatus.session_intelligence === 'llm-advisory' ? ' · 会话编排已启用' : ''}` : 'AI 评分准备中'}</span><span className="divider" /> <span className="mono">PRIVATE SESSION</span></div>
         </div>
       </header>
@@ -412,8 +437,7 @@ function App() {
               {([['assessment', '继续']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
             </div>
             <div className="research-tabs">
-              <span className="research-label">研究空间</span>
-              {([['research', '研究台'], ['review', '专家工作']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
+              {authUser.role === 'ADMIN' && <><span className="research-label">研究空间</span>{([['research', '研究台'], ['review', '专家工作']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
             </div>
           </nav>
           {view === 'assessment' && <ParticipantFlow initialStage="question" suppressProbe={completionHandoff} onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
@@ -741,6 +765,7 @@ function EvidenceView({ question, result, response, globalEvidence }: { question
 }
 
 function ResearchAccessBar({ tokenDraft, setTokenDraft, onUnlock, ready, loading }: { tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
+  if (ready && !tokenDraft) return <div className="research-access-bar"><span className="box-kicker">RESEARCH ACCESS</span><span className="research-admin-badge">管理员身份已验证 · 仅限授权邮箱</span></div>
   return <div className="research-access-bar">
     <span className="box-kicker">RESEARCH ACCESS</span>
     <input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="输入研究访问口令" aria-label="研究访问口令" />
@@ -777,7 +802,8 @@ function ReviewWorkspace({ cases, token, onReviewed, onLoadMore, hasMore, tokenD
     try {
       const response = await fetch(`/api/review/${encodeURIComponent(selectedId)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Research-Token': token },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Research-Token': token } : {}) },
         body: JSON.stringify({ adjudicated_score: adjudicatedScore === '' ? null : Number(adjudicatedScore), evidence_sufficiency: evidenceSufficiency, note }),
       })
       if (!response.ok) throw new Error('review failed')

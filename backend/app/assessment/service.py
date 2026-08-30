@@ -31,8 +31,25 @@ class AssessmentStore:
         self.audit = audit or AuditStore(workspace / "data" / "derived" / "audit.sqlite3")
         self.ai_advisor = ai_advisor or SessionAIAdvisor(scorer)
 
-    def start(self) -> dict[str, Any]:
-        return self.audit.create_session()
+    def start(self, user_id: str | None = None) -> dict[str, Any]:
+        return self.audit.create_session(user_id=user_id)
+
+    def _assert_access(self, session_id: str, user_id: str | None, *, allow_admin: bool = False) -> None:
+        if not self.audit.session_exists(session_id):
+            raise KeyError(session_id)
+        owner_id = self.audit.session_user_id(session_id)
+        # Legacy, unowned sessions remain usable by the existing research
+        # replay/tests. New authenticated sessions always have an owner.
+        if owner_id is None:
+            if user_id is None:
+                return
+            if allow_admin:
+                return
+            raise PermissionError("assessment session does not belong to this account")
+        if allow_admin:
+            return
+        if not user_id or owner_id != user_id:
+            raise PermissionError("assessment session does not belong to this account")
 
     def _latest_initial(self, session_id: str, question_id: str) -> dict[str, Any] | None:
         session = self.audit.get_session(session_id)
@@ -114,9 +131,10 @@ class AssessmentStore:
         probe_type: str | None = None,
         probe_option_id: str | None = None,
         probe_action: str = "ANSWER",
+        user_id: str | None = None,
+        allow_admin: bool = False,
     ) -> dict[str, Any]:
-        if not self.audit.session_exists(session_id):
-            raise KeyError(session_id)
+        self._assert_access(session_id, user_id, allow_admin=allow_admin)
         existing_session = self.audit.get_session(session_id)
         if existing_session and any(
             str((item.get("safety") or {}).get("state", "CLEAR")) != "CLEAR"
@@ -327,7 +345,8 @@ class AssessmentStore:
             "session_intelligence": ai_analysis,
         }
 
-    def get(self, session_id: str) -> dict[str, Any] | None:
+    def get(self, session_id: str, *, user_id: str | None = None, allow_admin: bool = False) -> dict[str, Any] | None:
+        self._assert_access(session_id, user_id, allow_admin=allow_admin)
         session = self.audit.get_session(session_id)
         if session is None:
             return None

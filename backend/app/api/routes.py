@@ -4,20 +4,30 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.assessment.service import AssessmentStore
 from backend.app.audit.store import AuditStore
+from backend.app.auth.mailer import MailDeliveryError, ResendMailer
+from backend.app.auth.service import AuthError, AuthService
+from backend.app.config import load_local_env
 from backend.app.safety.engine import screen
 from backend.app.scoring.engine import evidence_gap, load_rubrics, score_response
 from backend.app.scoring.llm import configured_scorer, score_with_configured_provider
-from backend.app.security import require_research_access
+from backend.app.security import (
+    SESSION_COOKIE,
+    _session_token,
+    require_admin_access,
+    require_current_user,
+    require_research_access,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -25,7 +35,30 @@ RUBRICS = load_rubrics(ROOT)
 AUDIT = AuditStore(ROOT / "data" / "derived" / "audit.sqlite3")
 SCORER, SCORER_MODE = configured_scorer(RUBRICS)
 STORE = AssessmentStore(RUBRICS, scorer=SCORER, audit=AUDIT, root=ROOT)
+AUTH = AuthService(AUDIT, mailer=ResendMailer())
 router = APIRouter(prefix="/api")
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyEmailRequest(BaseModel):
+    email: str
+    code: str = Field(min_length=6, max_length=6)
+
+
+class LoginRequest(RegisterRequest):
+    pass
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetConfirmRequest(VerifyEmailRequest):
+    new_password: str
 
 
 class ScoreRequest(BaseModel):
@@ -64,6 +97,87 @@ class ReviewRequest(BaseModel):
 @router.get("/questions")
 def questions() -> list[dict[str, Any]]:
     return [{"id": item_id, "question": data.get("question", ""), "dimension": data.get("dimension", ""), "criteria": data.get("criteria", [])} for item_id, data in sorted(RUBRICS.items())]
+
+
+def _auth_failure(exc: Exception) -> HTTPException:
+    if isinstance(exc, MailDeliveryError):
+        return HTTPException(status_code=503, detail="邮箱服务暂时不可用，请稍后重试。")
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/auth/register")
+def register(request: RegisterRequest) -> dict[str, Any]:
+    try:
+        return AUTH.register(request.email, request.password)
+    except (AuthError, MailDeliveryError) as exc:
+        raise _auth_failure(exc) from exc
+
+
+@router.post("/auth/verify-email")
+def verify_email(request: VerifyEmailRequest) -> dict[str, Any]:
+    try:
+        return AUTH.verify_email(request.email, request.code)
+    except AuthError as exc:
+        raise _auth_failure(exc) from exc
+
+
+@router.post("/auth/resend-verification")
+def resend_verification(request: PasswordResetRequest) -> dict[str, str]:
+    try:
+        AUTH.resend_verification(request.email)
+    except (AuthError, MailDeliveryError) as exc:
+        raise _auth_failure(exc) from exc
+    return {"message": "如果这个邮箱还没有完成验证，新的验证码会发送到邮箱。"}
+
+
+@router.post("/auth/login")
+def login(request: LoginRequest, response: Response) -> dict[str, Any]:
+    try:
+        user, token = AUTH.login(request.email, request.password)
+    except AuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    load_local_env()
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=os.getenv("AUTH_COOKIE_SECURE", "0").strip().lower() in {"1", "true", "yes"},
+        samesite="lax",
+        max_age=60 * 60 * 24 * 14,
+        path="/",
+    )
+    return {"user": user}
+
+
+@router.post("/auth/logout")
+def logout(response: Response, token: str | None = Depends(_session_token)) -> dict[str, bool]:
+    AUTH.logout(token)
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@router.get("/auth/me")
+def me(user: dict[str, Any] = Depends(require_current_user)) -> dict[str, Any]:
+    return {"user": user}
+
+
+@router.post("/auth/request-reset")
+def request_reset(request: PasswordResetRequest) -> dict[str, str]:
+    try:
+        AUTH.request_password_reset(request.email)
+    except (AuthError, MailDeliveryError) as exc:
+        # Keep invalid email syntax visible, but never reveal account existence.
+        raise _auth_failure(exc) from exc
+    return {"message": "如果这个邮箱已经注册，验证码会发送到邮箱。"}
+
+
+@router.post("/auth/reset-password")
+def reset_password(request: PasswordResetConfirmRequest) -> dict[str, bool]:
+    try:
+        AUTH.reset_password(request.email, request.code, request.new_password)
+    except AuthError as exc:
+        raise _auth_failure(exc) from exc
+    return {"ok": True}
 
 
 def _provider_model(mode: str) -> str:
@@ -112,12 +226,12 @@ def provider_status() -> dict[str, str]:
 
 
 @router.post("/assessment/start")
-def start_assessment() -> dict[str, Any]:
-    return STORE.start()
+def start_assessment(user: dict[str, Any] = Depends(require_current_user)) -> dict[str, Any]:
+    return STORE.start(user_id=user["id"])
 
 
 @router.post("/assessment/{session_id}/responses")
-def assessment_response(session_id: str, request: ResponseRequest) -> dict[str, Any]:
+def assessment_response(session_id: str, request: ResponseRequest, user: dict[str, Any] = Depends(require_current_user)) -> dict[str, Any]:
     try:
         return STORE.respond(
             session_id,
@@ -127,18 +241,49 @@ def assessment_response(session_id: str, request: ResponseRequest) -> dict[str, 
             request.probe_type,
             request.probe_option_id,
             request.probe_action,
+            user_id=user["id"],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="assessment session not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.get("/assessment/{session_id}")
-def assessment(session_id: str) -> dict[str, Any]:
-    value = STORE.get(session_id)
+def assessment(session_id: str, user: dict[str, Any] = Depends(require_current_user)) -> dict[str, Any]:
+    try:
+        value = STORE.get(session_id, user_id=user["id"], allow_admin=user.get("role") == "ADMIN")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="assessment session not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
+    return value
+
+
+@router.get("/admin/users")
+def admin_users(_: dict[str, Any] = Depends(require_admin_access)) -> list[dict[str, Any]]:
+    return AUDIT.list_users()
+
+
+@router.get("/admin/sessions")
+def admin_sessions(admin: dict[str, Any] = Depends(require_admin_access), limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=None, session_id=None, action="LIST", resource="sessions")
+    return AUDIT.list_all_sessions(limit=limit, offset=offset)
+
+
+@router.get("/admin/sessions/{session_id}")
+def admin_session(session_id: str, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    try:
+        value = STORE.get(session_id, allow_admin=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="assessment session not found") from exc
+    if value is None:
+        raise HTTPException(status_code=404, detail="assessment session not found")
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_session")
     return value
 
 

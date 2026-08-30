@@ -29,7 +29,7 @@ def reset(path: Path, export_path: Path) -> None:
         connection.execute("PRAGMA foreign_keys = ON")
         # Delete children first so this remains valid if foreign-key checks are
         # enabled on a future schema revision.
-        for table in ("reviews", "review_cases", "session_decisions", "events", "sessions"):
+        for table in ("reviews", "review_cases", "admin_access_logs", "auth_sessions", "auth_challenges", "session_decisions", "events", "sessions", "users"):
             connection.execute(f'DELETE FROM "{table}"')
     # Checkpoint and compact only after the delete transaction has committed;
     # SQLite rejects a WAL checkpoint while the same connection still owns a

@@ -38,6 +38,7 @@ class AuditStore:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    user_id TEXT REFERENCES users(id),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -95,21 +96,226 @@ class AuditStore:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_reviews_case ON reviews(response_id, created_at);
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    email_hash TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'PARTICIPANT',
+                    email_verified_at TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_login_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_users_email_hash ON users(email_hash);
+                CREATE TABLE IF NOT EXISTS auth_challenges (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT REFERENCES users(id),
+                    email_hash TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    consumed_at TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_challenges_lookup ON auth_challenges(email_hash, purpose, created_at);
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    token_hash TEXT NOT NULL UNIQUE,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    revoked_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash);
+                CREATE TABLE IF NOT EXISTS admin_access_logs (
+                    id TEXT PRIMARY KEY,
+                    admin_user_id TEXT NOT NULL REFERENCES users(id),
+                    target_user_id TEXT,
+                    session_id TEXT,
+                    action TEXT NOT NULL,
+                    resource TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_admin_access_logs_admin ON admin_access_logs(admin_user_id, created_at);
                 """
             )
+            session_columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "user_id" not in session_columns:
+                connection.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id)")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, updated_at)")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(review_cases)").fetchall()}
             if "adjudicated_score" not in columns:
                 connection.execute("ALTER TABLE review_cases ADD COLUMN adjudicated_score INTEGER")
 
-    def create_session(self) -> dict[str, Any]:
+    def create_session(self, user_id: str | None = None) -> dict[str, Any]:
         session_id = uuid.uuid4().hex
         now = utc_now()
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO sessions(id, created_at, updated_at, status) VALUES (?, ?, ?, ?)",
-                (session_id, now, now, "IN_PROGRESS"),
+                "INSERT INTO sessions(id, user_id, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?)",
+                (session_id, user_id, now, now, "IN_PROGRESS"),
             )
-        return {"id": session_id, "created_at": now, "updated_at": now, "status": "IN_PROGRESS", "items": []}
+        return {"id": session_id, "user_id": user_id, "created_at": now, "updated_at": now, "status": "IN_PROGRESS", "items": []}
+
+    def session_belongs_to_user(self, session_id: str, user_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute("SELECT 1 FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id)).fetchone()
+        return row is not None
+
+    def session_user_id(self, session_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return row["user_id"] if row else None
+
+    def list_users(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, email, role, email_verified_at, is_active, created_at, updated_at, last_login_at FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (max(1, min(limit, 200)), max(0, offset)),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "email": row["email"],
+                "role": row["role"],
+                "email_verified": bool(row["email_verified_at"]),
+                "is_active": bool(row["is_active"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "last_login_at": row["last_login_at"],
+            }
+            for row in rows
+        ]
+
+    def create_user(self, *, email: str, email_hash: str, password_hash: str, role: str) -> dict[str, Any]:
+        user_id = uuid.uuid4().hex
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO users(id, email, email_hash, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, email, email_hash, password_hash, role, now, now),
+            )
+        return {"id": user_id, "email": email, "role": role, "email_verified": False, "is_active": True, "created_at": now}
+
+    def find_user_by_email_hash(self, email_hash: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM users WHERE email_hash = ?", (email_hash,)).fetchone()
+        return dict(row) if row else None
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def mark_user_verified(self, user_id: str) -> None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?", (now, now, user_id))
+
+    def mark_user_login(self, user_id: str) -> None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", (now, now, user_id))
+
+    def update_user_password(self, user_id: str, password_hash: str) -> None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (password_hash, now, user_id))
+
+    def create_auth_challenge(self, *, user_id: str, email_hash: str, purpose: str, code_hash: str, expires_at: str) -> str:
+        challenge_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO auth_challenges(id, user_id, email_hash, purpose, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (challenge_id, user_id, email_hash, purpose, code_hash, expires_at, utc_now()),
+            )
+        return challenge_id
+
+    def consume_auth_challenge(self, *, email_hash: str, purpose: str, code_hash: str, now: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM auth_challenges WHERE email_hash = ? AND purpose = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                (email_hash, purpose),
+            ).fetchone()
+            if row is None or row["expires_at"] <= now or row["attempts"] >= 5:
+                return None
+            if row["code_hash"] != code_hash:
+                connection.execute("UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ?", (row["id"],))
+                return None
+            connection.execute("UPDATE auth_challenges SET consumed_at = ? WHERE id = ?", (now, row["id"]))
+            return dict(row)
+
+    def create_auth_session(self, *, user_id: str, token_hash: str, expires_at: str) -> str:
+        session_id = uuid.uuid4().hex
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO auth_sessions(id, user_id, token_hash, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, user_id, token_hash, expires_at, now, now),
+            )
+        return session_id
+
+    def get_auth_session_user(self, *, token_hash: str, now: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id
+                   WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? AND u.is_active = 1""",
+                (token_hash, now),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute("UPDATE auth_sessions SET last_seen_at = ? WHERE token_hash = ?", (now, token_hash))
+        return dict(row)
+
+    def revoke_auth_session(self, token_hash: str) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE auth_sessions SET revoked_at = ? WHERE token_hash = ?", (utc_now(), token_hash))
+
+    def revoke_user_auth_sessions(self, user_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", (utc_now(), user_id))
+
+    def list_sessions_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT id, user_id, created_at, updated_at, status, metadata_json FROM sessions WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)).fetchall()
+        output = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            output.append({"id": row["id"], "user_id": row["user_id"], "created_at": row["created_at"], "updated_at": row["updated_at"], "status": row["status"], "metadata": metadata})
+        return output
+
+    def list_all_sessions(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT s.id, s.user_id, s.created_at, s.updated_at, s.status, s.metadata_json, u.email, u.role
+                   FROM sessions s LEFT JOIN users u ON u.id = s.user_id
+                   ORDER BY s.updated_at DESC LIMIT ? OFFSET ?""",
+                (max(1, min(limit, 200)), max(0, offset)),
+            ).fetchall()
+        output = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            output.append({"id": row["id"], "user_id": row["user_id"], "email": row["email"], "role": row["role"], "created_at": row["created_at"], "updated_at": row["updated_at"], "status": row["status"], "metadata": metadata})
+        return output
+
+    def record_admin_access(self, *, admin_user_id: str, target_user_id: str | None, session_id: str | None, action: str, resource: str) -> str:
+        access_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO admin_access_logs(id, admin_user_id, target_user_id, session_id, action, resource, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (access_id, admin_user_id, target_user_id, session_id, action, resource, utc_now()),
+            )
+        return access_id
 
     def session_exists(self, session_id: str) -> bool:
         with self._connect() as connection:
@@ -256,7 +462,7 @@ class AuditStore:
                 "created_at": decision["created_at"],
             })
         return {
-            "id": session["id"], "created_at": session["created_at"], "updated_at": session["updated_at"],
+            "id": session["id"], "user_id": session["user_id"], "created_at": session["created_at"], "updated_at": session["updated_at"],
             "status": session["status"], "metadata": metadata, "items": items, "decision_history": decision_history,
         }
 

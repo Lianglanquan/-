@@ -13,7 +13,20 @@ npm install
 npm run dev -- --port 4173
 ```
 
-For local research use, copy `.env.example` to the ignored `.env.local` and set a private `RESEARCH_ACCESS_TOKEN`. External model calls remain disabled unless `ALLOW_EXTERNAL_SCORING=true`; with the default `SCORING_PROVIDER=centroid`, participant responses stay local and use the reproducible character n-gram baseline. If an opt-in provider is unavailable, scoring falls back to the deterministic baseline and marks the provider mode explicitly. Research Dashboard and Expert Review requests require the `X-Research-Token` header; participant endpoints do not.
+For local use, copy `.env.example` to the ignored `.env.local`. Set
+`ADMIN_EMAILS` to a comma-separated administrator allowlist and configure
+Resend (`RESEND_API_KEY`, `AUTH_FROM_EMAIL`) so new accounts can verify their
+email. All assessment sessions require a verified email/password login and are
+bound to an internal `user_id`; participants can only read their own sessions.
+Administrators can use the Research Dashboard and Expert Review workspace from
+the same login. The legacy `X-Research-Token` header remains supported for
+offline research scripts during migration.
+
+External model calls remain disabled unless `ALLOW_EXTERNAL_SCORING=true`; with
+the default `SCORING_PROVIDER=centroid`, participant responses stay local and
+use the reproducible character n-gram baseline. If an opt-in provider is
+unavailable, scoring falls back to the deterministic baseline and marks the
+provider mode explicitly.
 
 Open `http://127.0.0.1:4173`. Vite proxies `/api` to FastAPI. The scorer is a deterministic, auditable research baseline; it is not a clinical diagnosis or autonomous crisis-response system.
 
@@ -74,5 +87,9 @@ When a probe is selected now, the participant sees a companion-style `cat_probe`
 
 The participant-facing protocol, safety boundary, reserved exits, and copy
 validation rules are documented in [`docs/COMPANION_PROBE.md`](docs/COMPANION_PROBE.md).
+
+The interface uses 汇文明朝体 as its unified display and reading face. The
+webfont and its CC0 notice are kept under `public/fonts/` so production does
+not depend on a user's installed fonts.
 
 See `docs/ADR-001-evidence-aware-scoring.md`, `docs/ADR-002-participant-splits.md`, and the other `docs/` files for research and safety decisions.

@@ -1,28 +1,70 @@
-"""Research-side access control.
-
-Participant endpoints intentionally remain token-free. Any endpoint that can
-read historical responses, model metrics, review decisions, or full audit
-traces must use this dependency.
-"""
+"""Authentication and research-side access control dependencies."""
 
 from __future__ import annotations
 
 import os
 import secrets
+from typing import Any
 
-from fastapi import Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 
-from backend.app.config import load_local_env
+from backend.app.audit.store import AuditStore
+from backend.app.auth.mailer import ResendMailer
+from backend.app.auth.service import AuthService
+from backend.app.config import ROOT, load_local_env
 
 
-def require_research_access(x_research_token: str | None = Header(default=None)) -> str:
+SESSION_COOKIE = "qz_session"
+_AUDIT = AuditStore(ROOT / "data" / "derived" / "audit.sqlite3")
+_AUTH = AuthService(_AUDIT, mailer=ResendMailer())
+
+
+def auth_service() -> AuthService:
+    return _AUTH
+
+
+def _session_token(
+    authorization: str | None = Header(default=None),
+    qz_session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+) -> str | None:
+    if authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value.strip():
+            return value.strip()
+    return qz_session.strip() if qz_session else None
+
+
+def optional_current_user(token: str | None = Depends(_session_token)) -> dict[str, Any] | None:
+    return _AUTH.current_user(token)
+
+
+def require_current_user(user: dict[str, Any] | None = Depends(optional_current_user)) -> dict[str, Any]:
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please sign in to continue.")
+    return user
+
+
+def require_admin_access(user: dict[str, Any] = Depends(require_current_user)) -> dict[str, Any]:
+    if user.get("role") != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administrator access required.")
+    return user
+
+
+def require_research_access(
+    x_research_token: str | None = Header(default=None),
+    user: dict[str, Any] | None = Depends(optional_current_user),
+) -> str:
+    """Allow an authenticated administrator, while preserving legacy tokens."""
+
+    if isinstance(user, dict) and user.get("role") == "ADMIN":
+        return str(user["id"])
     load_local_env()
     expected = os.getenv("RESEARCH_ACCESS_TOKEN", "").strip()
-    if not expected:
+    if expected and x_research_token and secrets.compare_digest(x_research_token, expected):
+        return "researcher"
+    if not expected and not user:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Research access is disabled until RESEARCH_ACCESS_TOKEN is configured.",
+            detail="Research access is disabled until an administrator signs in.",
         )
-    if not x_research_token or not secrets.compare_digest(x_research_token, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid research access token.")
-    return "researcher"
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Administrator access required.")
