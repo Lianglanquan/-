@@ -1,0 +1,19 @@
+{
+  "participants": 205,
+  "responses": 4100,
+  "questions": 20,
+  "split_participants": {
+    "train": 129,
+    "validation": 38,
+    "test": 38
+  },
+  "legacy_scores": {
+    "0": 2256,
+    "1": 1477,
+    "2": 367
+  },
+  "source_files": [
+    "data/raw/系统调试样本.xlsx",
+    "data/raw/正式调研题项及评分细则(1).docx"
+  ]
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Qiuzheng psychological assessment API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/srv/qiuzheng/app
+EnvironmentFile=/etc/qiuzheng/qiuzheng.env
+ExecStart=/srv/qiuzheng/venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/srv/qiuzheng/app/data/derived
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+{
+  "id": "Q20",
+  "source_id": "Q20",
+  "version": "1.0.0",
+  "status": "source-extracted",
+  "question": "如果0分代表“完全不受影响”，10分代表“已经被它渗透到方方面面”，那么近两周那些难受的事情对我的整体生活影响程度，我打______分。",
+  "dimension": "触发与情绪-心理占据强度",
+  "criteria": [
+    {
+      "score": 0,
+      "description": "0-5分，认为困扰对生活影响轻微",
+      "examples": []
+    },
+    {
+      "score": 1,
+      "description": "6-8分，认为困扰对生活有显著影响但尚有缓冲空间",
+      "examples": []
+    },
+    {
+      "score": 2,
+      "description": "9-10分，认为困扰已全面渗透生活，功能严重受损",
+      "examples": []
+    }
+  ],
+  "provenance": {
+    "source": "正式调研题项及评分细则(1).docx",
+    "table_index": 19
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "source": {
+    "site": "Framesbase",
+    "url": "https://app.framesbase.app/",
+    "accessed_at": "2026-08-30",
+    "method": "authenticated Chrome tab and public preview media",
+    "note": "This file records design direction and implementation briefs. It does not contain browser cookies or account data."
+  },
+  "references": [
+    {
+      "name": "Mindful Companion",
+      "category": "Wellness",
+      "asset": "/framesbase/mindful-companion.webp",
+      "role": ["participant hero", "guided reflection"],
+      "traits": ["misty indigo atmosphere", "centered headline", "blur-reveal typography", "floating phone-like interaction", "soft white cards", "large breathing room"],
+      "adaptation": "Use the quiet lavender atmosphere and staged reveal for the first question. Replace the phone mockup with a real response card; keep the emotional tone, not the product copy or logo."
+    },
+    {
+      "name": "Nature Ritual",
+      "category": "Wellness",
+      "asset": "/framesbase/nature-ritual.webp",
+      "role": ["welcome visual", "pause state", "completion moment"],
+      "traits": ["dark botanical photography", "high-contrast editorial type", "fresh green accents", "layered image depth"],
+      "adaptation": "Use the botanical image as an optional pause or completion backdrop. Keep safety and scoring text on a solid accessible surface."
+    },
+    {
+      "name": "Celestial Renewal",
+      "category": "Wellness",
+      "asset": "/framesbase/celestial-renewal.webp",
+      "role": ["future reflection", "assessment completion"],
+      "traits": ["deep blue night field", "thin elegant headline", "horizon-like focal line", "quiet single CTA"],
+      "adaptation": "Use the horizon metaphor for the future-imagination section and the end-of-session view. Keep buttons restrained and avoid making a risk score feel dramatic."
+    },
+    {
+      "name": "Breathstone",
+      "category": "Wellness",
+      "asset": "/framesbase/breathstone.webp",
+      "role": ["evidence map", "reflection summary"],
+      "traits": ["warm cream canvas", "monumental editorial wordmark", "organic stone forms", "muted landscape"],
+      "adaptation": "Use the measured pace, cream canvas, and oversized section labels for evidence replay. The evidence itself remains plain, explicit, and easy to audit."
+    },
+    {
+      "name": "Routine Coach",
+      "category": "Wellness",
+      "asset": "/framesbase/routine-coach.webp",
+      "role": ["adaptive clarification", "next-step guidance"],
+      "traits": ["clear blue daylight", "human-centered image", "small routine cards", "friendly action hierarchy"],
+      "adaptation": "Use a small, supportive card stack for one clarification question and its target semantic gap. Never present suggested answers or imply which score is preferred."
+    },
+    {
+      "name": "Inner Quest",
+      "category": "Mindfulness",
+      "asset": "/framesbase/mindful-companion.webp",
+      "role": ["open-ended question canvas", "empty state"],
+      "traits": ["monochrome dotted illustration", "centered composition", "minimal navigation", "single clear action"],
+      "adaptation": "Use its restraint for the empty scoring state and the first-open experience. Keep the participant's words visually primary."
+    }
+  ]
+}
