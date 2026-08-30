@@ -131,6 +131,16 @@ class AuditStore:
                     revoked_at TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash);
+                CREATE TABLE IF NOT EXISTS admin_invites (
+                    id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    email_hash TEXT NOT NULL,
+                    invited_by TEXT NOT NULL REFERENCES users(id),
+                    expires_at TEXT NOT NULL,
+                    consumed_at TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_admin_invites_lookup ON admin_invites(email_hash, consumed_at, expires_at);
                 CREATE TABLE IF NOT EXISTS admin_access_logs (
                     id TEXT PRIMARY KEY,
                     admin_user_id TEXT NOT NULL REFERENCES users(id),
@@ -174,7 +184,9 @@ class AuditStore:
     def list_users(self, *, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT id, email, role, email_verified_at, is_active, created_at, updated_at, last_login_at FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                """SELECT id, email, role, email_verified_at, is_active, created_at, updated_at, last_login_at,
+                          (SELECT COUNT(*) FROM sessions s WHERE s.user_id = users.id) AS session_count
+                   FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?""",
                 (max(1, min(limit, 200)), max(0, offset)),
             ).fetchall()
         return [
@@ -187,6 +199,7 @@ class AuditStore:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "last_login_at": row["last_login_at"],
+                "session_count": int(row["session_count"] or 0),
             }
             for row in rows
         ]
@@ -221,6 +234,25 @@ class AuditStore:
         with self._connect() as connection:
             connection.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", (now, now, user_id))
 
+    def update_user_role(self, user_id: str, role: str) -> dict[str, Any] | None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("UPDATE users SET role = ?, updated_at = ? WHERE id = ?", (role, now, user_id))
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def update_user_active(self, user_id: str, is_active: bool) -> dict[str, Any] | None:
+        now = utc_now()
+        with self._connect() as connection:
+            connection.execute("UPDATE users SET is_active = ?, updated_at = ? WHERE id = ?", (1 if is_active else 0, now, user_id))
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def count_admins(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS n FROM users WHERE role = 'ADMIN' AND is_active = 1").fetchone()
+        return int(row["n"] or 0)
+
     def update_user_password(self, user_id: str, password_hash: str) -> None:
         now = utc_now()
         with self._connect() as connection:
@@ -234,6 +266,31 @@ class AuditStore:
                 (challenge_id, user_id, email_hash, purpose, code_hash, expires_at, utc_now()),
             )
         return challenge_id
+
+    def create_admin_invite(self, *, email: str, email_hash: str, invited_by: str, expires_at: str) -> str:
+        invite_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO admin_invites(id, email, email_hash, invited_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (invite_id, email, email_hash, invited_by, expires_at, utc_now()),
+            )
+        return invite_id
+
+    def consume_admin_invite(self, *, email_hash: str, now: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM admin_invites WHERE email_hash = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                (email_hash,),
+            ).fetchone()
+            if row is None or row["expires_at"] <= now:
+                return None
+            connection.execute("UPDATE admin_invites SET consumed_at = ? WHERE id = ?", (now, row["id"]))
+            return dict(row)
+
+    def invitation_consumed(self, email: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute("SELECT 1 FROM admin_invites WHERE email = ? AND consumed_at IS NOT NULL LIMIT 1", (email.lower().strip(),)).fetchone()
+        return row is not None
 
     def consume_auth_challenge(self, *, email_hash: str, purpose: str, code_hash: str, now: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -316,6 +373,18 @@ class AuditStore:
                 (access_id, admin_user_id, target_user_id, session_id, action, resource, utc_now()),
             )
         return access_id
+
+    def list_admin_access_logs(self, admin_user_id: str | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
+        query = "SELECT * FROM admin_access_logs"
+        values: list[Any] = []
+        if admin_user_id:
+            query += " WHERE admin_user_id = ?"
+            values.append(admin_user_id)
+        query += " ORDER BY created_at, rowid LIMIT ?"
+        values.append(max(1, min(limit, 500)))
+        with self._connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [dict(row) for row in rows]
 
     def session_exists(self, session_id: str) -> bool:
         with self._connect() as connection:

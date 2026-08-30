@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MouseFollower from 'mouse-follower'
 import { gsap } from 'gsap'
 import 'mouse-follower/dist/mouse-follower.min.css'
 import ParticipantFlow from './components/participant/ParticipantFlow'
 import AuthFlow, { AuthUser } from './components/auth/AuthFlow'
+import AdminMembersView, { AdminMember } from './components/admin/AdminMembersView'
+import AdminSessionsView, { AdminSessionDetail, AdminSessionSummary } from './components/admin/AdminSessionsView'
 
 type Criterion = { score: number; description: string; examples: string[] }
 type Question = { id: string; question: string; dimension: string; criteria: Criterion[] }
@@ -79,8 +81,18 @@ type SessionIntelligence = {
   planning_notes?: string[]
   guardrail_result?: string
 }
+type ParticipantHandoff = {
+  version: string
+  mode: 'PARTICIPANT_HANDOFF' | 'PROFESSIONAL_FLOW' | string
+  title: string
+  message: string
+  what_i_heard: Array<{ group: string; detail: string; answered: number; evidence_density: number; status: string }>
+  still_open: Array<{ question_id: string; detail: string; status: string }>
+  next_steps: Array<{ id: string; label: string; detail: string }>
+  takeaways: string[]
+}
 type ProviderStatus = { mode: string; provider: string; model: string; session_intelligence?: string }
-type ResearchSummary = typeof fallbackSummary & { review_queue?: Record<string, number>; evaluation?: Record<string, unknown> }
+type ResearchSummary = typeof fallbackSummary & { review_queue?: Record<string, number>; evaluation?: Record<string, unknown>; overall_mean_score?: number | null; risk_counts?: Record<string, number>; risk_rule_version?: string; risk_disclaimer?: string }
 
 const fallbackQuestions: Question[] = [
   ['Q01', '过去两周，当我停止做某件事、一个人安静下来的时候，我的情绪是______。', '触发与情绪 · 情绪痛苦强度'],
@@ -116,10 +128,10 @@ const fallbackSummary = {
 const scoreLabels = ['0 · 稳定 / 适应', '1 · 需要关注', '2 · 明显负向']
 
 type Screen = 'welcome' | 'assessment' | 'complete'
-type View = 'assessment' | 'evidence' | 'research' | 'review' | 'replay'
+type View = 'assessment' | 'evidence' | 'research' | 'review' | 'replay' | 'members' | 'sessions'
 type Route = Screen | View
 
-const routeNames: Route[] = ['welcome', 'assessment', 'complete', 'evidence', 'research', 'review', 'replay']
+const routeNames: Route[] = ['welcome', 'assessment', 'complete', 'evidence', 'research', 'review', 'replay', 'members', 'sessions']
 
 function routeFromHash(): Route {
   if (typeof window === 'undefined') return 'welcome'
@@ -170,6 +182,7 @@ function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [nextAction, setNextAction] = useState<NextAction>({ type: 'CONTINUE_SEED' })
   const [globalEvidence, setGlobalEvidence] = useState<GlobalEvidenceState | null>(null)
+  const [participantHandoff, setParticipantHandoff] = useState<ParticipantHandoff | null>(null)
   const [completionHandoff, setCompletionHandoff] = useState(false)
   const [researchToken, setResearchToken] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('research_access_token') ?? '' : '')
   const [researchTokenDraft, setResearchTokenDraft] = useState(() => typeof window !== 'undefined' ? window.sessionStorage.getItem('research_access_token') ?? '' : '')
@@ -178,6 +191,28 @@ function App() {
   const [entryTransition, setEntryTransition] = useState(false)
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [members, setMembers] = useState<AdminMember[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [membersMessage, setMembersMessage] = useState('')
+  const [adminSessions, setAdminSessions] = useState<AdminSessionSummary[]>([])
+  const [adminSessionsLoading, setAdminSessionsLoading] = useState(false)
+  const [adminSessionDetail, setAdminSessionDetail] = useState<AdminSessionDetail | null>(null)
+  const [adminSessionDetailLoading, setAdminSessionDetailLoading] = useState(false)
+  const [adminSessionsMessage, setAdminSessionsMessage] = useState('')
+
+  const refreshMembers = useCallback(async () => {
+    if (authUser?.role !== 'ADMIN') return
+    setMembersLoading(true)
+    try {
+      const response = await fetch('/api/admin/users', { credentials: 'include' })
+      if (!response.ok) throw new Error('成员列表暂时没有打开。')
+      setMembers(await response.json() as AdminMember[])
+    } catch (error) {
+      setMembersMessage(error instanceof Error ? error.message : '成员列表暂时没有打开。')
+    } finally {
+      setMembersLoading(false)
+    }
+  }, [authUser?.role])
 
   useEffect(() => {
     fetch('/api/questions').then((res) => res.ok ? res.json() : Promise.reject()).then(setQuestions).catch(() => undefined)
@@ -222,6 +257,51 @@ function App() {
       setResearchReady(false)
     }).finally(() => setResearchLoading(false))
   }, [researchToken, authUser?.role])
+
+  useEffect(() => {
+    if (authUser?.role === 'ADMIN' && view === 'members') void refreshMembers()
+  }, [authUser?.role, refreshMembers, view])
+
+  const refreshAdminSessions = useCallback(async () => {
+    if (authUser?.role !== 'ADMIN') return
+    setAdminSessionsLoading(true)
+    setAdminSessionsMessage('')
+    try {
+      const response = await fetch('/api/admin/sessions?limit=200&offset=0', { credentials: 'include' })
+      if (!response.ok) throw new Error('会话列表暂时没有打开。')
+      setAdminSessions(await response.json() as AdminSessionSummary[])
+    } catch (error) {
+      setAdminSessionsMessage(error instanceof Error ? error.message : '会话列表暂时没有打开。')
+    } finally {
+      setAdminSessionsLoading(false)
+    }
+  }, [authUser?.role])
+
+  const openAdminSession = useCallback(async (id: string) => {
+    if (authUser?.role !== 'ADMIN') return
+    setAdminSessionDetailLoading(true)
+    setAdminSessionsMessage('')
+    try {
+      const response = await fetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { credentials: 'include' })
+      if (!response.ok) throw new Error('这场会话暂时没有打开。')
+      setAdminSessionDetail(await response.json() as AdminSessionDetail)
+    } catch (error) {
+      setAdminSessionsMessage(error instanceof Error ? error.message : '这场会话暂时没有打开。')
+      setAdminSessionDetail(null)
+    } finally {
+      setAdminSessionDetailLoading(false)
+    }
+  }, [authUser?.role])
+
+  useEffect(() => {
+    if (authUser?.role !== 'ADMIN' || view !== 'sessions') return
+    void refreshAdminSessions()
+    const timer = window.setInterval(() => {
+      void refreshAdminSessions()
+      if (adminSessionDetail?.id) void openAdminSession(adminSessionDetail.id)
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [adminSessionDetail?.id, authUser?.role, openAdminSession, refreshAdminSessions, view])
 
   const refreshReviewCases = async () => {
     if (authUser?.role !== 'ADMIN') return
@@ -273,6 +353,7 @@ function App() {
       const next: ScoreResult = sessionId && payload.score ? payload.score : payload
       const action = sessionId && payload.next_action ? payload.next_action as NextAction : { type: 'CONTINUE_SEED' as const }
       if (sessionId && payload.global_evidence) setGlobalEvidence(payload.global_evidence as GlobalEvidenceState)
+      if (sessionId && payload.participant_handoff) setParticipantHandoff(payload.participant_handoff as ParticipantHandoff)
       setNextAction(action)
       setResult(next)
       setSubmitted((prev) => ({ ...prev, [question.id]: next }))
@@ -316,6 +397,7 @@ function App() {
     setResult(null)
     setSubmitted({})
     setGlobalEvidence(null)
+    setParticipantHandoff(null)
     setCompletionHandoff(false)
     setNextAction({ type: 'CONTINUE_SEED' })
     setErrorMessage('')
@@ -339,6 +421,13 @@ function App() {
     setScreen(next.screen)
     setView(next.view)
   }
+
+  useEffect(() => {
+    if (authUser?.role === 'ADMIN' || !['members', 'research', 'review', 'sessions'].includes(view)) return
+    if (typeof window !== 'undefined' && window.location.hash !== '#assessment') window.location.hash = 'assessment'
+    setScreen('assessment')
+    setView('assessment')
+  }, [authUser?.role, view])
 
   const selectQuestion = (index: number) => {
     if (safetyFlowActive) return
@@ -397,6 +486,47 @@ function App() {
     setResearchToken(value)
   }
 
+  const changeMemberRole = async (member: AdminMember) => {
+    setMembersMessage('保存中…')
+    const role = member.role === 'ADMIN' ? 'PARTICIPANT' : 'ADMIN'
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(member.id)}/role`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }),
+      })
+      const payload = await response.json().catch(() => ({})) as { detail?: string }
+      if (!response.ok) throw new Error(payload.detail || '角色变更没有保存。')
+      await refreshMembers()
+      setMembersMessage(role === 'ADMIN' ? `${member.email} 已成为管理员。` : `${member.email} 已回到参与者权限。`)
+    } catch (error) {
+      setMembersMessage(error instanceof Error ? error.message : '角色变更没有保存。')
+    }
+  }
+
+  const changeMemberActive = async (member: AdminMember) => {
+    setMembersMessage('保存中…')
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(member.id)}/active`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !member.is_active }),
+      })
+      const payload = await response.json().catch(() => ({})) as { detail?: string }
+      if (!response.ok) throw new Error(payload.detail || '账号状态没有保存。')
+      await refreshMembers()
+      setMembersMessage(member.is_active ? `${member.email} 已暂时停用。` : `${member.email} 已恢复。`)
+    } catch (error) {
+      setMembersMessage(error instanceof Error ? error.message : '账号状态没有保存。')
+    }
+  }
+
+  const inviteMember = async (email: string) => {
+    const response = await fetch('/api/admin/invites', {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+    })
+    const payload = await response.json().catch(() => ({})) as { detail?: string; status?: string }
+    if (!response.ok) throw new Error(payload.detail || '预授权没有保存。')
+    setMembersMessage(payload.status === 'PENDING' ? `${email} 已加入管理员预授权。` : `${email} 已更新为管理员。`)
+    await refreshMembers()
+  }
+
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)
     setAuthUser(null)
@@ -412,7 +542,6 @@ function App() {
 
   if (authLoading) return <main className="auth-loading"><span>小猫正在把门打开…</span></main>
   if (!authUser) return <AuthFlow onAuthenticated={setAuthUser} />
-
   return (
     <main className={`app-shell ${screen === 'welcome' ? 'landing-active' : ''} ${screen === 'assessment' && participantView ? 'participant-active' : ''}`}>
       <PlayfulCursor key={`${screen}-${view}`} enabled={catPlayfulSurface} />
@@ -427,7 +556,7 @@ function App() {
         </div>
       </header>
       {screen === 'welcome' && <WelcomeView onStart={startAssessment} />}
-      {screen === 'complete' && <CompletionView answered={answered} submitted={submitted} globalEvidence={globalEvidence} nextAction={nextAction} onContinue={continueAfterCompletion} onEvidence={() => openView('evidence')} onReplay={() => openView('replay')} />}
+      {screen === 'complete' && <CompletionView answered={answered} submitted={submitted} globalEvidence={globalEvidence} participantHandoff={participantHandoff} nextAction={nextAction} onContinue={continueAfterCompletion} onEvidence={() => openView('evidence')} onReplay={() => openView('replay')} />}
       {screen === 'assessment' && <div className={`workspace ${participantView ? 'participant-workspace' : 'research-workspace'}`}>
         {participantView && <ParticipantAtmosphere />}
         {participantView && <QuestionDirectory questions={questions} selected={selected} answered={answered} submitted={submitted} onSelect={selectQuestion} disabled={safetyFlowActive} />}
@@ -437,7 +566,7 @@ function App() {
               {([['assessment', '继续']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
             </div>
             <div className="research-tabs">
-              {authUser.role === 'ADMIN' && <><span className="research-label">研究空间</span>{([['research', '研究台'], ['review', '专家工作']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
+              {authUser.role === 'ADMIN' && <><span className="research-label">研究空间</span>{([['research', '研究台'], ['review', '专家工作'], ['sessions', '评估会话'], ['members', '成员与权限']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
             </div>
           </nav>
           {view === 'assessment' && <ParticipantFlow initialStage="question" suppressProbe={completionHandoff} onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
@@ -445,6 +574,8 @@ function App() {
           {view === 'research' && <ResearchView summary={summary} distribution={scoreDistribution} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'review' && <ReviewView cases={cases} token={researchToken} onReviewed={refreshReviewCases} onLoadMore={loadMoreReviewCases} hasMore={reviewHasMore} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'replay' && <ReplayView submitted={submitted} questions={questions} />}
+          {view === 'members' && authUser.role === 'ADMIN' && <AdminMembersView members={members} currentUserId={authUser.id} loading={membersLoading} message={membersMessage} onInvite={inviteMember} onRoleChange={changeMemberRole} onActiveChange={changeMemberActive} onRefresh={refreshMembers} />}
+          {view === 'sessions' && authUser.role === 'ADMIN' && <AdminSessionsView sessions={adminSessions} selected={adminSessionDetail} loading={adminSessionsLoading} detailLoading={adminSessionDetailLoading} message={adminSessionsMessage} onRefresh={refreshAdminSessions} onSelect={openAdminSession} />}
         </section>
       </div>}
     </main>
@@ -723,12 +854,12 @@ function WelcomeView({ onStart }: { onStart: () => void }) {
   </section>
 }
 
-function CompletionView({ answered, submitted, globalEvidence, nextAction, onContinue, onEvidence, onReplay }: { answered: number; submitted: Record<string, ScoreResult>; globalEvidence: GlobalEvidenceState | null; nextAction: NextAction; onContinue: () => void; onEvidence: () => void; onReplay: () => void }) {
+function CompletionView({ answered, submitted, globalEvidence, participantHandoff, nextAction, onContinue, onEvidence, onReplay }: { answered: number; submitted: Record<string, ScoreResult>; globalEvidence: GlobalEvidenceState | null; participantHandoff: ParticipantHandoff | null; nextAction: NextAction; onContinue: () => void; onEvidence: () => void; onReplay: () => void }) {
   const humanReview = Object.values(submitted).filter((item) => item.score_status === 'HUMAN_REVIEW').length
   const unresolved = globalEvidence?.unresolved_gaps ?? []
   const constructs = globalEvidence?.constructs ?? []
   const safety = nextAction.type === 'SAFETY_FLOW' || Object.values(submitted).some((item) => item.safety_state !== 'CLEAR')
-  const summary = globalEvidence?.session_intelligence?.session_summary
+  const summary = participantHandoff?.message || globalEvidence?.session_intelligence?.session_summary
   const canContinueProbe = !safety && unresolved.length > 0 && ['CLARIFY_NOW', 'CONFIRM_NOW'].includes(nextAction.type) && Boolean(nextAction.question_id)
   const headline = safety
     ? '先停在这里，剩下的交给专业人员。'
@@ -742,7 +873,10 @@ function CompletionView({ answered, submitted, globalEvidence, nextAction, onCon
     : unresolved.length > 0
       ? `小猫没有急着替你下结论，当前还有 ${unresolved.length} 个节点保留着自己的声音。`
       : '每一条回答都留在会话里，之后可以回看它们怎样彼此照见。'
-  return <section className="completion-scene"><div className="completion-backdrop"><img src="/user-references/ref3.jpg" alt="抽象的安静旅程插画" /></div><div className="completion-overlay" /><div className="completion-inner"><div className="completion-kicker"><span className="landing-kicker-dot" /> SESSION EVIDENCE MAP</div><h1>谢谢你，<br /><em>让自己被听见。</em></h1><p>{headline}</p><div className="completion-stats"><div><strong>{answered}</strong><span>已记录</span></div><div><strong>{globalEvidence?.probe_count ?? 0}</strong><span>次靠近</span></div><div><strong>{unresolved.length}</strong><span>保留未决</span></div></div><div className="completion-session-card"><div className="completion-session-heading"><span className="box-kicker">整场评估的回声</span><span className="completion-session-status">{safety ? '专业流程' : unresolved.length ? '仍可求证' : humanReview ? '等待复核' : '已收束'}</span></div><p>{summary || detail}</p><div className="completion-constructs">{constructs.map((construct, index) => <div className="completion-construct" key={String(construct.id ?? index)}><div><strong>{String(construct.label ?? construct.id ?? '未分类')}</strong><span>{String(construct.status ?? 'UNANSWERED')}</span></div><small>{String(construct.answered ?? 0)} 题 · 证据 {Math.round(Number(construct.evidence_density ?? 0) * 100)}%</small><i><span style={{ width: `${Math.min(100, Number(construct.evidence_density ?? 0) * 100)}%` }} /></i></div>)}</div>{!safety && unresolved.length > 0 && <div className="completion-unresolved"><span className="box-kicker">下一步</span><span>可以再靠近一处，也可以先把整场地图收好。</span></div>}</div><div className="completion-actions"><button className="landing-primary" type="button" onClick={canContinueProbe ? onContinue : onEvidence}>{canContinueProbe ? '继续靠近一处' : '看整场地图'} <span>↗</span></button><button className="landing-secondary light" type="button" onClick={onReplay}>回看回答 <span>↺</span></button><button className="landing-secondary light" type="button" onClick={canContinueProbe ? onEvidence : onContinue}>{canContinueProbe ? '先收好地图' : '稍后'} <span>→</span></button></div></div><div className="completion-corner">SESSION TRACE <span /> {globalEvidence ? `${globalEvidence.seed_answered} / ${globalEvidence.seed_total}` : `${answered} / 20`}</div></section>
+  const handoff = participantHandoff?.mode === 'PARTICIPANT_HANDOFF' ? participantHandoff : null
+  const professionalHandoff = participantHandoff?.mode === 'PROFESSIONAL_FLOW'
+  const statusText = (status: string) => status === 'EVIDENCED' ? '已经彼此照见' : status === 'NEEDS_REVIEW' ? '还留着一点空间' : '正在形成'
+  return <section className={`completion-scene ${handoff ? 'has-handoff' : ''}`}><div className="completion-backdrop"><img src="/user-references/ref3.jpg" alt="抽象的安静旅程插画" /></div><div className="completion-overlay" /><div className="completion-inner"><div className="completion-kicker"><span className="landing-kicker-dot" /> SESSION EVIDENCE MAP</div><h1>谢谢你，<br /><em>让自己被听见。</em></h1><p className="completion-finish-note">作答已完成，感谢你的参与。</p><p>{professionalHandoff ? participantHandoff?.message : headline}</p><div className="completion-stats"><div><strong>{answered}</strong><span>已记录</span></div><div><strong>{globalEvidence?.probe_count ?? 0}</strong><span>次靠近</span></div><div><strong>{unresolved.length}</strong><span>保留未决</span></div></div>{handoff && <div className="participant-handoff" aria-label="本次会话交付"><div className="handoff-heading"><span className="box-kicker">{handoff.title}</span><span>不是定论，是一张回得去的地图</span></div><p className="handoff-message">{handoff.message}</p><div className="handoff-columns"><section><div className="handoff-section-title"><span>01</span><strong>我听见了什么</strong></div><div className="handoff-list">{handoff.what_i_heard.length ? handoff.what_i_heard.map((item) => <div className="handoff-item" key={item.group}><div><strong>{item.group}</strong><span>{statusText(item.status)}</span></div><p>{item.detail}</p></div>) : <div className="handoff-empty">这一次先留下原话，等它们慢慢长出轮廓。</div>}</div></section><section><div className="handoff-section-title"><span>02</span><strong>还有哪些地方留着</strong></div><div className="handoff-list">{handoff.still_open.length ? handoff.still_open.map((item, index) => <div className="handoff-item open" key={`${item.question_id}-${index}`}><div><strong>{item.question_id || '一处回答'}</strong><span>可以以后再听</span></div><p>{item.detail}</p></div>) : <div className="handoff-empty">没有必须现在解决的地方。你可以先把这次收好。</div>}</div></section></div><section className="handoff-takeaways"><div className="handoff-section-title"><span>03</span><strong>你可以带走的</strong></div><div className="takeaway-list">{handoff.takeaways.map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}</div></section><section className="handoff-next"><div className="handoff-section-title"><span>04</span><strong>接下来怎么做，由你决定</strong></div><div className="handoff-next-grid">{handoff.next_steps.map((step) => <div key={step.id}><strong>{step.label}</strong><span>{step.detail}</span></div>)}</div></section></div>}{professionalHandoff && <div className="professional-handoff"><span className="box-kicker">专业流程</span><p>这次对话会停在这里，不继续用轻松的语气解释你。你的原话已经保留，后续可以交给专业人员一起看。</p></div>}<div className="completion-session-card"><div className="completion-session-heading"><span className="box-kicker">整场评估的回声</span><span className="completion-session-status">{safety ? '专业流程' : unresolved.length ? '仍可求证' : humanReview ? '等待复核' : '已收束'}</span></div><p>{summary || detail}</p><div className="completion-constructs">{constructs.map((construct, index) => <div className="completion-construct" key={String(construct.id ?? index)}><div><strong>{String(construct.label ?? construct.id ?? '未分类')}</strong><span>{String(construct.status ?? 'UNANSWERED')}</span></div><small>{String(construct.answered ?? 0)} 题 · 证据 {Math.round(Number(construct.evidence_density ?? 0) * 100)}%</small><i><span style={{ width: `${Math.min(100, Number(construct.evidence_density ?? 0) * 100)}%` }} /></i></div>)}</div>{!safety && unresolved.length > 0 && <div className="completion-unresolved"><span className="box-kicker">下一步</span><span>可以再靠近一处，也可以先把整场地图收好。</span></div>}</div><div className="completion-actions"><button className="landing-primary" type="button" onClick={canContinueProbe ? onContinue : onEvidence}>{canContinueProbe ? '继续靠近一处' : professionalHandoff ? '查看已保留内容' : '看整场地图'} <span>↗</span></button><button className="landing-secondary light" type="button" onClick={onReplay}>回看回答 <span>↺</span></button>{!professionalHandoff && <button className="landing-secondary light" type="button" onClick={canContinueProbe ? onEvidence : onContinue}>{canContinueProbe ? '先收好地图' : '稍后'} <span>→</span></button>}</div></div><div className="completion-corner">SESSION TRACE <span /> {globalEvidence ? `${globalEvidence.seed_answered} / ${globalEvidence.seed_total}` : `${answered} / 20`}</div></section>
 }
 
 function AssessmentView({ question, selected, response, setResponse, result, clarification, setClarification, runScore, loading, onNext }: { question: Question; selected: number; response: string; setResponse: (v: string) => void; result?: ScoreResult; clarification: string; setClarification: (v: string) => void; runScore: (text?: string, isClarification?: boolean) => void; loading: boolean; onNext: () => void }) {
@@ -781,7 +915,9 @@ function ResearchView({ summary, distribution, tokenDraft, setTokenDraft, onUnlo
   const selectiveTest = ((evaluation.selective as Record<string, unknown> | undefined)?.test ?? {}) as Record<string, unknown>
   const runtime = (summary as ResearchSummary & { assessment_runtime?: Record<string, unknown> }).assessment_runtime ?? {}
   const metric = (value: unknown, suffix = '') => typeof value === 'number' ? `${(value * (suffix === '%' ? 100 : 1)).toFixed(suffix === '%' ? 1 : 3)}${suffix}` : '—'
-  return <div className="detail-view research-view"><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>LOCKED PARTICIPANT SPLIT</span></div><h2>数据决定架构</h2><p className="view-intro">历史人工标签永久保留为 legacy_score；证据充分性是独立标注轴。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /><div className="metric-grid"><div><span className="box-kicker">参与者</span><strong>{summary.participants}</strong><small>participant-level split</small></div><div><span className="box-kicker">逐题回答</span><strong>{summary.responses.toLocaleString()}</strong><small>20 seed probes</small></div><div><span className="box-kicker">test participants</span><strong>{summary.splits.test}</strong><small>no leakage across questions</small></div><div><span className="box-kicker">待复核候选</span><strong>{summary.questions.reduce((sum, item) => sum + item.provisional_candidates, 0)}</strong><small>item-aware evidence gaps</small></div></div><div className="research-evaluation"><div><span>TEST ACCURACY</span><strong>{metric(testMetrics.accuracy, '%')}</strong></div><div><span>MACRO-F1</span><strong>{metric(testMetrics.macro_f1)}</strong></div><div><span>SELECTIVE COVERAGE</span><strong>{metric(selectiveTest.coverage, '%')}</strong></div><div><span>覆盖集 ACC</span><strong>{metric(selectiveTest.accuracy_on_covered, '%')}</strong></div><div><span>CLARIFICATIONS</span><strong>{String(runtime.clarifications ?? 0)}</strong></div><div><span>HUMAN REVIEW</span><strong>{String(runtime.human_review_events ?? 0)}</strong></div></div><div className="research-columns"><section className="chart-section"><div className="section-heading"><strong>Legacy score distribution</strong><span>n = {summary.responses.toLocaleString()}</span></div><div className="bars">{distribution.map((item) => <div className="bar-row" key={item.score}><span><ScorePill score={item.score} /></span><div className="bar-track"><span className={`bar-fill fill-${item.score}`} style={{ width: `${(item.count / max) * 100}%` }} /></div><strong>{item.count.toLocaleString()}</strong></div>)}</div><div className="split-pills">{Object.entries(summary.splits).map(([key, value]) => <span key={key}><b>{key}</b> {value} participants</span>)}</div></section><section className="difficulty-section"><div className="section-heading"><strong>题目难度 / 模糊候选</strong><span>provisional candidates</span></div><div className="difficulty-list">{summary.questions.slice(0, 10).map((item) => <div className="difficulty-row" key={item.id}><span className="mono">{item.id}</span><div className="difficulty-track"><span style={{ width: `${Math.min(100, item.provisional_candidates * 3)}%` }} /></div><strong>{item.provisional_candidates}</strong></div>)}</div></section></div></div>
+  const riskCounts = summary.risk_counts ?? {}
+  const riskLabels: Array<[string, string]> = [['LOW', '低关注'], ['MODERATE', '中关注'], ['HIGH', '高关注'], ['INCOMPLETE', '未完成'], ['SAFETY_REVIEW', '安全复核']]
+  return <div className="detail-view research-view"><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>LOCKED PARTICIPANT SPLIT</span></div><h2>数据决定架构</h2><p className="view-intro">历史人工标签永久保留为 legacy_score；证据充分性是独立标注轴。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /><div className="metric-grid"><div><span className="box-kicker">参与者</span><strong>{summary.participants}</strong><small>participant-level split</small></div><div><span className="box-kicker">逐题回答</span><strong>{summary.responses.toLocaleString()}</strong><small>20 seed probes</small></div><div><span className="box-kicker">test participants</span><strong>{summary.splits.test}</strong><small>no leakage across questions</small></div><div><span className="box-kicker">待复核候选</span><strong>{summary.questions.reduce((sum, item) => sum + item.provisional_candidates, 0)}</strong><small>item-aware evidence gaps</small></div></div><section className="population-report"><div className="section-heading"><strong>群体描述性统计</strong><span>{summary.risk_rule_version || 'research-band-v1'}</span></div><div className="population-report-metrics"><div><span>整体平均题分</span><strong>{typeof summary.overall_mean_score === 'number' ? summary.overall_mean_score.toFixed(3) : '—'}</strong></div>{riskLabels.map(([key, label]) => <div key={key}><span>{label}</span><strong>{Number(riskCounts[key] ?? 0).toLocaleString()}</strong><small>人</small></div>)}</div><p>{summary.risk_disclaimer || '研究规则分层，仅用于群体描述性统计。'}</p></section><div className="research-evaluation"><div><span>TEST ACCURACY</span><strong>{metric(testMetrics.accuracy, '%')}</strong></div><div><span>MACRO-F1</span><strong>{metric(testMetrics.macro_f1)}</strong></div><div><span>SELECTIVE COVERAGE</span><strong>{metric(selectiveTest.coverage, '%')}</strong></div><div><span>覆盖集 ACC</span><strong>{metric(selectiveTest.accuracy_on_covered, '%')}</strong></div><div><span>CLARIFICATIONS</span><strong>{String(runtime.clarifications ?? 0)}</strong></div><div><span>HUMAN REVIEW</span><strong>{String(runtime.human_review_events ?? 0)}</strong></div></div><div className="research-columns"><section className="chart-section"><div className="section-heading"><strong>Legacy score distribution</strong><span>n = {summary.responses.toLocaleString()}</span></div><div className="bars">{distribution.map((item) => <div className="bar-row" key={item.score}><span><ScorePill score={item.score} /></span><div className="bar-track"><span className={`bar-fill fill-${item.score}`} style={{ width: `${(item.count / max) * 100}%` }} /></div><strong>{item.count.toLocaleString()}</strong></div>)}</div><div className="split-pills">{Object.entries(summary.splits).map(([key, value]) => <span key={key}><b>{key}</b> {value} participants</span>)}</div></section><section className="difficulty-section"><div className="section-heading"><strong>题目难度 / 模糊候选</strong><span>provisional candidates</span></div><div className="difficulty-list">{summary.questions.slice(0, 10).map((item) => <div className="difficulty-row" key={item.id}><span className="mono">{item.id}</span><div className="difficulty-track"><span style={{ width: `${Math.min(100, item.provisional_candidates * 3)}%` }} /></div><strong>{item.provisional_candidates}</strong></div>)}</div></section></div></div>
 }
 
 function ReviewView({ cases, token, onReviewed, onLoadMore, hasMore, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { cases: Array<Record<string, unknown>>; token: string; onReviewed: () => Promise<void>; onLoadMore: () => Promise<void>; hasMore: boolean; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {

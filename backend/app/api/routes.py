@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.assessment.service import AssessmentStore
+from backend.app.assessment.reporting import build_population_summary
 from backend.app.audit.store import AuditStore
 from backend.app.auth.mailer import MailDeliveryError, ResendMailer
 from backend.app.auth.service import AuthError, AuthService
@@ -59,6 +60,18 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordResetConfirmRequest(VerifyEmailRequest):
     new_password: str
+
+
+class AdminRoleRequest(BaseModel):
+    role: Literal["ADMIN", "PARTICIPANT"]
+
+
+class AdminActiveRequest(BaseModel):
+    is_active: bool
+
+
+class AdminInviteRequest(BaseModel):
+    email: str
 
 
 class ScoreRequest(BaseModel):
@@ -265,8 +278,39 @@ def assessment(session_id: str, user: dict[str, Any] = Depends(require_current_u
 
 
 @router.get("/admin/users")
-def admin_users(_: dict[str, Any] = Depends(require_admin_access)) -> list[dict[str, Any]]:
+def admin_users(admin: dict[str, Any] = Depends(require_admin_access)) -> list[dict[str, Any]]:
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=None, session_id=None, action="LIST", resource="users")
     return AUDIT.list_users()
+
+
+@router.post("/admin/users/{user_id}/role")
+def admin_set_role(user_id: str, request: AdminRoleRequest, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    try:
+        return AUTH.admin_set_role(admin["id"], user_id, request.role)
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/users/{user_id}/active")
+def admin_set_active(user_id: str, request: AdminActiveRequest, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    try:
+        return AUTH.admin_set_active(admin["id"], user_id, request.is_active)
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/admin/invites")
+def admin_invite(request: AdminInviteRequest, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    try:
+        return AUTH.admin_invite(admin["id"], request.email)
+    except AuthError as exc:
+        raise _auth_failure(exc) from exc
+
+
+@router.get("/admin/audit")
+def admin_audit(admin: dict[str, Any] = Depends(require_admin_access), limit: int = 200) -> list[dict[str, Any]]:
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=None, session_id=None, action="LIST", resource="admin_access_logs")
+    return AUDIT.list_admin_access_logs(limit=limit)
 
 
 @router.get("/admin/sessions")
@@ -351,10 +395,13 @@ def research_summary(_: str = Depends(require_research_access)) -> dict[str, Any
     evaluation_path = ROOT / "data" / "derived" / "evaluation.json"
     if evaluation_path.exists():
         evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+    population = build_population_summary(records)
     return {
         "participants": len({r["participant_id"] for r in records}), "responses": total, "score_counts": score_counts,
         "questions": questions_summary, "splits": {split: len({r["participant_id"] for r in records if r["split"] == split}) for split in ("train", "validation", "test")},
         "review_queue": AUDIT.counts(), "assessment_runtime": AUDIT.assessment_metrics(), "evaluation": evaluation,
+        "overall_mean_score": population["overall_mean_score"], "risk_counts": population["risk_counts"],
+        "risk_rule_version": population["risk_rule_version"], "risk_disclaimer": population["disclaimer"],
     }
 
 

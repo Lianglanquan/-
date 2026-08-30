@@ -99,7 +99,8 @@ class AuthService:
         if self.audit.find_user_by_email_hash(email_hash):
             raise AuthError("Unable to create account")
         allowlist = {str(value).strip().lower() for value in env_list("ADMIN_EMAILS") if str(value).strip()}
-        role = "ADMIN" if normalized in allowlist else "PARTICIPANT"
+        invitation = self.audit.consume_admin_invite(email_hash=email_hash, now=_iso(_now()))
+        role = "ADMIN" if normalized in allowlist or invitation else "PARTICIPANT"
         user = self.audit.create_user(email=normalized, email_hash=email_hash, password_hash=hash_password(password), role=role)
         code = f"{secrets.randbelow(1_000_000):06d}"
         self.audit.create_auth_challenge(
@@ -192,3 +193,65 @@ class AuthService:
     def logout(self, token: str | None) -> None:
         if token:
             self.audit.revoke_auth_session(_digest(token))
+
+    def admin_set_role(self, actor_user_id: str, target_user_id: str, role: str) -> dict[str, Any]:
+        role = str(role or "").strip().upper()
+        if role not in {"ADMIN", "PARTICIPANT"}:
+            raise AuthError("Invalid role")
+        target = self.audit.get_user(target_user_id)
+        if not target:
+            raise AuthError("Account not found")
+        if target.get("role") == "ADMIN" and role != "ADMIN" and target.get("is_active", 1) and self.audit.count_admins() <= 1:
+            raise AuthError("At least one active administrator is required")
+        updated = self.audit.update_user_role(target_user_id, role)
+        if not updated:
+            raise AuthError("Account not found")
+        self.audit.record_admin_access(
+            admin_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            session_id=None,
+            action="ROLE_CHANGE",
+            resource=f"user_role:{role}",
+        )
+        return _public_user(updated)
+
+    def admin_set_active(self, actor_user_id: str, target_user_id: str, is_active: bool) -> dict[str, Any]:
+        target = self.audit.get_user(target_user_id)
+        if not target:
+            raise AuthError("Account not found")
+        if target.get("role") == "ADMIN" and target.get("is_active", 1) and not is_active and self.audit.count_admins() <= 1:
+            raise AuthError("At least one active administrator is required")
+        updated = self.audit.update_user_active(target_user_id, is_active)
+        if not updated:
+            raise AuthError("Account not found")
+        if not is_active:
+            self.audit.revoke_user_auth_sessions(target_user_id)
+        self.audit.record_admin_access(
+            admin_user_id=actor_user_id,
+            target_user_id=target_user_id,
+            session_id=None,
+            action="ACCOUNT_ACTIVATE" if is_active else "ACCOUNT_DEACTIVATE",
+            resource="user_account",
+        )
+        return _public_user(updated)
+
+    def admin_invite(self, actor_user_id: str, email: str) -> dict[str, Any]:
+        normalized = normalize_email(email)
+        existing = self.audit.find_user_by_email_hash(_digest(normalized))
+        if existing:
+            return self.admin_set_role(actor_user_id, existing["id"], "ADMIN")
+        expires_at = _iso(_now() + timedelta(days=7))
+        invite_id = self.audit.create_admin_invite(
+            email=normalized,
+            email_hash=_digest(normalized),
+            invited_by=actor_user_id,
+            expires_at=expires_at,
+        )
+        self.audit.record_admin_access(
+            admin_user_id=actor_user_id,
+            target_user_id=None,
+            session_id=None,
+            action="ADMIN_INVITE",
+            resource=f"admin_invite:{invite_id}",
+        )
+        return {"id": invite_id, "email": normalized, "expires_at": expires_at, "status": "PENDING"}

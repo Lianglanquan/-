@@ -22,6 +22,22 @@ Administrators can use the Research Dashboard and Expert Review workspace from
 the same login. The legacy `X-Research-Token` header remains supported for
 offline research scripts during migration.
 
+To create a verified administrator without placing a password in the
+repository, run the one-time bootstrap script with hidden input (or temporary
+`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` environment variables):
+
+```bash
+.venv/bin/python scripts/bootstrap_admin.py
+```
+
+The administrator workspace includes a session control room. It shows the
+participant's original responses, each item score and evidence state, the
+session AI summary, the evidence map, an aggregate score, a transparent
+research-band label, and a reviewable intervention recommendation. Population
+descriptive statistics include the overall mean item score and counts by
+research band. These bands are explicitly marked as research rules and never
+replace expert adjudication.
+
 External model calls remain disabled unless `ALLOW_EXTERNAL_SCORING=true`; with
 the default `SCORING_PROVIDER=centroid`, participant responses stay local and
 use the reproducible character n-gram baseline. If an opt-in provider is

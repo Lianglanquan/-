@@ -133,6 +133,96 @@ def _fallback_advice(state: dict[str, Any], *, reason: str | None = None) -> dic
     }
 
 
+def build_participant_handoff(state: dict[str, Any], advice: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Turn the evidence map into a useful, non-diagnostic participant handoff.
+
+    This is intentionally separate from scoring. It tells a participant what
+    the session made visible, where the evidence is still open, and what they
+    may choose to do next. It never emits a risk label, diagnosis, or clinical
+    conclusion.
+    """
+
+    action = state.get("next_action") or {}
+    if str(action.get("type", "")).upper() == "SAFETY_FLOW":
+        return {
+            "version": "participant-handoff-v1",
+            "mode": "PROFESSIONAL_FLOW",
+            "title": "先停在这里",
+            "message": "这次对话里有一句话需要专业人员接住。自动流程会先停下，不继续替你解释。",
+            "what_i_heard": [],
+            "still_open": [],
+            "next_steps": [],
+            "takeaways": ["你的原话已经被保留，后续可以交给专业人员一起看。"],
+        }
+
+    constructs = state.get("constructs") if isinstance(state.get("constructs"), list) else []
+    insight_by_group: dict[str, str] = {}
+    for insight in (advice or {}).get("construct_insights", []) if isinstance((advice or {}).get("construct_insights"), list) else []:
+        if not isinstance(insight, dict):
+            continue
+        group = _safe_text(insight.get("group"), limit=120)
+        summary = _safe_text(insight.get("summary"), limit=360)
+        # AI wording is advisory. Keep participant copy concrete, short, and
+        # free of diagnostic or risk-label language before it reaches UI.
+        if group and summary and not any(term in summary for term in ("风险等级", "风险评估", "诊断", "自杀风险", "你是")):
+            insight_by_group[group] = summary
+    what_i_heard = []
+    for construct in constructs:
+        if not isinstance(construct, dict) or int(construct.get("answered", 0) or 0) <= 0:
+            continue
+        status = str(construct.get("status", "EVIDENCED"))
+        group = str(construct.get("label") or construct.get("id") or "一组回答")
+        detail = insight_by_group.get(group)
+        if not detail:
+            if status == "EVIDENCED":
+                detail = f"这里有 {int(construct.get('answered', 0) or 0)} 道回答彼此照见，形成了一条可以回看的线索。"
+            else:
+                detail = f"这里已经留下 {int(construct.get('answered', 0) or 0)} 道回答，但仍有一处没有急着替你定论。"
+        what_i_heard.append({
+            "group": group,
+            "detail": detail,
+            "answered": int(construct.get("answered", 0) or 0),
+            "evidence_density": round(float(construct.get("evidence_density", 0.0) or 0.0), 3),
+            "status": status,
+        })
+
+    unresolved = state.get("unresolved_gaps") if isinstance(state.get("unresolved_gaps"), list) else []
+    still_open = []
+    for item in unresolved[:6]:
+        if not isinstance(item, dict):
+            continue
+        still_open.append({
+            "question_id": str(item.get("question_id") or ""),
+            "detail": str(item.get("target_gap") or "这部分还可以再听清一点，但现在不需要急着下结论。"),
+            "status": str(item.get("status") or "OPEN"),
+        })
+
+    next_steps = [
+        {"id": "VIEW_MAP", "label": "回看这张地图", "detail": "看看哪些回答已经彼此照见，哪些地方仍保留着空间。"},
+        {"id": "SAVE_SESSION", "label": "先把这次收好", "detail": "不需要现在解释完自己；这份记录会留在你的私密会话里。"},
+    ]
+    if unresolved and str(action.get("type", "")).upper() in {"CLARIFY_NOW", "CONFIRM_NOW"}:
+        next_steps.insert(1, {"id": "CONTINUE_PROBE", "label": "继续靠近一处", "detail": "如果愿意，只挑当前最想说清的一处，不必重新回答全部问题。"})
+
+    summary = _safe_text((advice or {}).get("session_summary"), limit=420)
+    if not summary:
+        summary = f"这次共留下 {state.get('seed_answered', 0)}/{state.get('seed_total', 20)} 道回答；它们组成了一张可以回看的证据地图。"
+    return {
+        "version": "participant-handoff-v1",
+        "mode": "PARTICIPANT_HANDOFF",
+        "title": "这一次，你留下了什么",
+        "message": summary,
+        "what_i_heard": what_i_heard[:8],
+        "still_open": still_open,
+        "next_steps": next_steps,
+        "takeaways": [
+            "你得到的不是一个给你下定义的分数，而是一张能回到原话的证据地图。",
+            "已经说清的地方被看见，还没说清的地方被保留下来。",
+            "下一步由你选择：回看、继续靠近，或先把这次收好。",
+        ],
+    }
+
+
 def _normalise_advice(raw: dict[str, Any], state: dict[str, Any], provider: Any) -> dict[str, Any]:
     """Validate and bound provider output before it can reach the UI."""
 

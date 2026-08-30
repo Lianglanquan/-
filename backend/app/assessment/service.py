@@ -7,9 +7,10 @@ from copy import deepcopy
 from typing import Any
 
 from backend.app.audit.store import AuditStore
-from backend.app.assessment.intelligence import SessionAIAdvisor, apply_ai_planning
+from backend.app.assessment.intelligence import SessionAIAdvisor, apply_ai_planning, build_participant_handoff
 from backend.app.assessment.orchestrator import build_global_evidence_state, infer_probe_type
 from backend.app.assessment.probes import default_cat_probe
+from backend.app.assessment.reporting import build_session_admin_report
 from backend.app.safety.engine import screen
 from backend.app.scoring.engine import CatProbe, ScoreResult, score_response
 from backend.app.scoring.llm import score_with_configured_provider
@@ -282,6 +283,8 @@ class AssessmentStore:
             state=deepcopy(deterministic_evidence),
         )
         global_evidence = apply_ai_planning(deepcopy(deterministic_evidence), ai_analysis)
+        participant_handoff = build_participant_handoff(global_evidence, ai_analysis)
+        admin_report = build_session_admin_report(session["items"] if session else [], seed_total=global_evidence.get("seed_total", 20))
         decision_id = self.audit.append_session_decision(
             session_id=session_id,
             event_id=event_id,
@@ -296,6 +299,8 @@ class AssessmentStore:
             {
                 "latest_global_evidence": global_evidence,
                 "latest_ai_analysis": ai_analysis,
+                "latest_participant_handoff": participant_handoff,
+                "latest_admin_report": admin_report,
                 "latest_event_id": event_id,
             },
         )
@@ -343,6 +348,7 @@ class AssessmentStore:
             "global_evidence": global_evidence,
             "next_action": next_action,
             "session_intelligence": ai_analysis,
+            "participant_handoff": participant_handoff,
         }
 
     def get(self, session_id: str, *, user_id: str | None = None, allow_admin: bool = False) -> dict[str, Any] | None:
@@ -358,9 +364,23 @@ class AssessmentStore:
         else:
             ai_analysis = self.ai_advisor.advise(items=session["items"], rubrics=self.rubrics, state=deepcopy(deterministic_evidence))
         global_evidence = apply_ai_planning(deepcopy(deterministic_evidence), ai_analysis)
+        participant_handoff = (session.get("metadata") or {}).get("latest_participant_handoff")
+        if not isinstance(participant_handoff, dict):
+            participant_handoff = build_participant_handoff(global_evidence, ai_analysis)
         session["global_evidence"] = global_evidence
         session["next_action"] = global_evidence["next_action"]
         session["session_intelligence"] = ai_analysis
+        session["participant_handoff"] = participant_handoff
+        if allow_admin:
+            session["admin_report"] = build_session_admin_report(session["items"], seed_total=global_evidence.get("seed_total", 20))
+        else:
+            # The participant may read their own evidence map, but the
+            # administrator-only aggregate report must not travel through the
+            # same session payload.
+            session["metadata"] = {
+                key: value for key, value in (session.get("metadata") or {}).items()
+                if key != "latest_admin_report"
+            }
         action_type = global_evidence["next_action"].get("type")
         next_status = {
             "COMPLETE": "COMPLETED",
