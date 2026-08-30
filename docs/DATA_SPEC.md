@@ -4,6 +4,7 @@
 
 - `data/raw/系统调试样本.xlsx` is retained unchanged. It contains 205 participants, 20 prompts, 4,100 response rows, historical `0/1/2` scores, and human rationales.
 - `data/raw/正式调研题项及评分细则(1).docx` is the source of truth for the 20 item rubrics. `scripts/parse_rubric.py` extracts each table into `rubrics/Q01.json` … `Q20.json`.
+- `data/raw/正式调研380人(1).xlsx` is an answer-only real-survey workbook for local testing. `scripts/parse_real_survey.py` reads its Q1--Q20 columns and excludes the entire participant when Q20 parses outside the valid `0--10` range. The observed out-of-range values are `30` (2 participants), `70` (1), and `80` (1), so the generated local test set contains 376 of 380 participants. The source workbook and `data/derived/real_survey/` remain ignored and are never production inputs.
 
 ## Canonical response record
 
@@ -20,5 +21,7 @@ Runtime participant sessions are stored separately in the generated SQLite audit
 ## Splits and retention
 
 Splits are deterministic SHA-256 buckets of `participant_id` (65% train, 15% validation, 20% test). Every answer by one participant stays in one split. Raw files are never overwritten; generated files belong in `data/derived/` and should not contain additional identifying data.
+
+The real-survey parser replaces each source `作答ID` with a stable opaque hash before writing derived records. Its manifest records only aggregate quality counts and the Q20 filter rule; no raw participant identifier is copied into the derived test set.
 
 Historical review APIs expose an opaque `historical:<hash>` case identifier and omit the internal payload/participant identifier. Session review cases use `session:<session_id>:<question_id>` internally so the full event chain can be replayed locally.

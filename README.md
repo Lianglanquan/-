@@ -29,6 +29,14 @@ npm run build
 
 `scripts/build_dataset.py` reads the unchanged files in `data/raw/`, writes canonical records to `data/derived/`, and uses participant-level deterministic splits. `scripts/train_centroid.py` trains only on the participant-locked train split and writes the model/report artifacts. Runtime sessions and expert decisions are persisted in `data/derived/audit.sqlite3`; `legacy_score` and `legacy_rationale` remain historical annotations, while `adjudicated_score` and `evidence_sufficiency` are separate review fields.
 
+For the anonymous real-survey answer workbook used in local smoke tests, run:
+
+```bash
+.venv/bin/python scripts/parse_real_survey.py --xlsx data/raw/正式调研380人\(1\).xlsx --out data/derived/real_survey
+```
+
+The real-survey parser keeps the 20 answer texts but does not invent legacy labels. It excludes a whole participant when Q20 parses to a number outside the documented `0--10` range (including the observed `30`, `70`, and `80` entries), hashes source response IDs, and writes a local-only manifest with the included/excluded counts. The raw workbook and derived real-survey responses are ignored by Git and must not be uploaded to production.
+
 The raw spreadsheet and document are intentionally excluded from version
 control because they contain sensitive response material. Place approved source
 copies in `data/raw/` on a research workstation before running the dataset

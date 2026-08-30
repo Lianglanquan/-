@@ -5,6 +5,7 @@ data/derived/responses.jsonl
 data/derived/audit.sqlite3
 data/derived/audit.sqlite3-*
 data/derived/adjudicated_dataset.jsonl
+data/derived/real_survey/
 data/raw/*
 !data/raw/.gitkeep
 __pycache__/
