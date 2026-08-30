@@ -57,6 +57,28 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.score_status, "HUMAN_REVIEW")
         self.assertTrue(result.review_recommended)
 
+    def test_centroid_enforces_q20_numeric_rubric_rule(self) -> None:
+        model_path = Path(__file__).resolve().parents[2] / "models" / "supervised" / "char_centroid_v1.json"
+        scorer = CentroidScorer(self.rubrics, model_path)
+        result = scorer.score("Q20", "8")
+        self.assertEqual(result.preliminary_score, 1)
+        self.assertEqual(result.score_status, "CONFIRMED")
+        self.assertEqual(result.evidence_sufficiency, "SUFFICIENT")
+        self.assertIn("Q20_NUMERIC_RULE", result.decision_reasons)
+
+        chinese = scorer.score("Q20", "七分")
+        self.assertEqual(chinese.preliminary_score, 1)
+        self.assertEqual(chinese.score_status, "CONFIRMED")
+        self.assertIn("Q20_NUMERIC_RULE", chinese.decision_reasons)
+
+    def test_centroid_respects_unique_rubric_example(self) -> None:
+        model_path = Path(__file__).resolve().parents[2] / "models" / "supervised" / "char_centroid_v1.json"
+        scorer = CentroidScorer(self.rubrics, model_path)
+        result = scorer.score("Q03", "感动")
+        self.assertEqual(result.preliminary_score, 0)
+        self.assertEqual(result.score_status, "CONFIRMED")
+        self.assertIn("RUBRIC_EXACT_MATCH", result.decision_reasons)
+
     def test_audit_store_survives_reopen_and_records_adjudication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "audit.sqlite3"
@@ -105,6 +127,8 @@ class PipelineTest(unittest.TestCase):
             self.assertIsNone(first["score"].get("cat_probe"))
             with self.assertRaises(ValueError):
                 store.respond(session["id"], "Q19", "我想补充", clarification=True)
+            with self.assertRaises(ValueError):
+                store.respond(session["id"], "Q20", "4")
 
     def test_session_orchestrator_defers_early_gap(self) -> None:
         items = [{

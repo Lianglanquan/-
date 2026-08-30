@@ -43,6 +43,23 @@ To run the non-persistent scorer smoke test over that filtered set:
 .venv/bin/python scripts/smoke_real_survey.py
 ```
 
+To replay every included participant through the configured runtime scorer and
+session orchestrator, and export an auditable CSV for expert review:
+
+```bash
+.venv/bin/python scripts/review_real_survey.py \
+  --data data/derived/real_survey/responses.jsonl \
+  --out data/derived/real_survey/project_review.csv
+```
+
+The review CSV contains opaque participant ids, item scores, evidence
+sufficiency, model uncertainty, safety state, cross-item support/conflict
+signals, the session-level next action, and the selected cat-probe contract.
+It is generated locally and remains ignored by Git. Answer-only real-survey
+data has no expert gold labels, so `HUMAN_REVIEW` and `PROVISIONAL` are review
+queues rather than claims that the system has made a clinically correct
+judgement.
+
 It prints aggregate status/safety counts only and never writes to the runtime audit database.
 
 The raw spreadsheet and document are intentionally excluded from version

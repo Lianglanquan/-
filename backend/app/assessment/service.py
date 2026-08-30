@@ -117,6 +117,12 @@ class AssessmentStore:
     ) -> dict[str, Any]:
         if not self.audit.session_exists(session_id):
             raise KeyError(session_id)
+        existing_session = self.audit.get_session(session_id)
+        if existing_session and any(
+            str((item.get("safety") or {}).get("state", "CLEAR")) != "CLEAR"
+            for item in existing_session.get("items", [])
+        ):
+            raise ValueError("assessment session is safety-gated and cannot continue through the automatic flow")
         if not clarification and probe_type:
             raise ValueError("probe_type is only valid for an adaptive probe")
         if not clarification and (probe_option_id or probe_action != "ANSWER"):

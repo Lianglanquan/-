@@ -90,6 +90,36 @@ GAP_PROBES: dict[str, tuple[str, str]] = {
     "Q20": ("0 到 10 的影响分数还不明确", "如果只选一个 0 到 10 的数字，你会选几分？"),
 }
 
+_Q20_CHINESE_VALUES = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
+def q20_numeric_values(response: str) -> list[int]:
+    """Extract explicit Q20 numbers without treating ordinary prose as scores."""
+
+    text = str(response or "").strip()
+    arabic = [int(value) for value in re.findall(r"(?<!\d)(10|[0-9])(?!\d)", text)]
+    if arabic:
+        return arabic
+    chinese = re.findall(r"([零一二两三四五六七八九十])\s*分", text)
+    if chinese:
+        return [_Q20_CHINESE_VALUES[value] for value in chinese]
+    if re.fullmatch(r"[零一二两三四五六七八九十]", text):
+        return [_Q20_CHINESE_VALUES[text]]
+    return []
+
 
 def load_rubrics(root: Path) -> dict[str, dict[str, Any]]:
     result = {}
@@ -105,9 +135,9 @@ def load_rubrics(root: Path) -> dict[str, dict[str, Any]]:
 def _score(question_id: str, response: str) -> int:
     text = response.strip()
     if question_id == "Q20":
-        match = re.search(r"(?:10|[0-9])", text)
-        if match:
-            value = int(match.group())
+        values = q20_numeric_values(text)
+        if len(values) == 1:
+            value = values[0]
             return 0 if value <= 5 else 1 if value <= 8 else 2
     if any(token in text for token in HIGH):
         return 2
@@ -133,8 +163,8 @@ def evidence_gap(question_id: str, response: str, rubric: dict[str, Any] | None 
         ("回答的具体方向还不明确", "你能用一个具体感受、想法或做法补充说明吗？"),
     )
     if question_id == "Q20":
-        matches = re.findall(r"(?<!\d)(10|[0-9])(?!\d)", text)
-        if len(matches) != 1:
+        matches = q20_numeric_values(text)
+        if len(matches) != 1 or not 0 <= matches[0] <= 10:
             return "INVALID_NUMERIC_RESPONSE", target_gap, question
         return None
     if not text or not re.search(r"[\w\u4e00-\u9fff]", text):
