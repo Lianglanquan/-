@@ -1,0 +1,11 @@
+[Unit]
+Description=Qiuzheng GitHub main branch deployment poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=APP_ROOT=/srv/qiuzheng
+Environment=REPOSITORY=/srv/qiuzheng/app
+ExecStart=/srv/qiuzheng/current/deploy/scripts/poll-and-deploy.sh

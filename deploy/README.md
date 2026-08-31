@@ -45,6 +45,12 @@ repository. The first server bootstrap can be run once with:
 sudo bash deploy/scripts/prepare-server.sh /srv/qiuzheng /srv/qiuzheng/shared
 ```
 
+The server also runs `qiuzheng-deploy-poller.timer` every two minutes. It pulls
+the public `main` branch and invokes the same release script when a new commit
+appears, so production deployment does not depend on a GitHub secret being
+present. GitHub Actions remains available as a faster path when the optional
+`PROD_*` secrets are configured.
+
 Each release is health-checked before activation. If `/ready` does not become
 healthy, the previous `current` release is restored automatically. To inspect
 the active release and data location:
