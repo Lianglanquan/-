@@ -19,6 +19,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("PROD_SSH_KEY", workflow)
         self.assertIn("concurrency:", workflow)
 
+    def test_release_script_bootstraps_http_when_certificate_is_not_ready(self) -> None:
+        script = (ROOT / "deploy/scripts/deploy-release.sh").read_text(encoding="utf-8")
+        fallback = (ROOT / "deploy/nginx/qiuzheng.xyz.http.conf").read_text(encoding="utf-8")
+        self.assertIn("qiuzheng.xyz.http.conf", script)
+        self.assertIn("/etc/letsencrypt/live/qiuzheng.xyz/fullchain.pem", script)
+        self.assertIn("listen 80", fallback)
+        self.assertNotIn("ssl_certificate", fallback)
+
 
 if __name__ == "__main__":
     unittest.main()

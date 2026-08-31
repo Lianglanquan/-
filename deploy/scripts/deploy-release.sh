@@ -58,7 +58,11 @@ if [[ -f "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.timer" ]]; then
   install -m 0644 "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.timer" /etc/systemd/system/qiuzheng-deploy-poller.timer
 fi
 if [[ -f "$CURRENT/deploy/nginx/qiuzheng.xyz.conf" ]]; then
-  install -m 0644 "$CURRENT/deploy/nginx/qiuzheng.xyz.conf" /etc/nginx/sites-available/qiuzheng.xyz.conf
+  nginx_conf="$CURRENT/deploy/nginx/qiuzheng.xyz.conf"
+  if [[ ! -f /etc/letsencrypt/live/qiuzheng.xyz/fullchain.pem || ! -f /etc/letsencrypt/live/qiuzheng.xyz/privkey.pem ]]; then
+    nginx_conf="$CURRENT/deploy/nginx/qiuzheng.xyz.http.conf"
+  fi
+  install -m 0644 "$nginx_conf" /etc/nginx/sites-available/qiuzheng.xyz.conf
   ln -sfn /etc/nginx/sites-available/qiuzheng.xyz.conf /etc/nginx/sites-enabled/qiuzheng.xyz.conf
   nginx -t
   systemctl reload nginx
