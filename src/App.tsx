@@ -423,11 +423,17 @@ function App() {
   }
 
   useEffect(() => {
+    if (authUser?.role === 'ADMIN' && screen === 'welcome') {
+      if (typeof window !== 'undefined' && window.location.hash !== '#sessions') window.history.replaceState(null, '', '#sessions')
+      setScreen('assessment')
+      setView('sessions')
+      return
+    }
     if (authUser?.role === 'ADMIN' || !['members', 'research', 'review', 'sessions'].includes(view)) return
     if (typeof window !== 'undefined' && window.location.hash !== '#assessment') window.location.hash = 'assessment'
     setScreen('assessment')
     setView('assessment')
-  }, [authUser?.role, view])
+  }, [authUser?.role, screen, view])
 
   const selectQuestion = (index: number) => {
     if (safetyFlowActive) return
@@ -474,7 +480,16 @@ function App() {
     else selectQuestion(selected + 1)
   }
   const openView = (nextView: View) => {
-    if (nextView === 'assessment') setCompletionHandoff(false)
+    if (nextView === 'assessment') {
+      setCompletionHandoff(false)
+      // An administrator can also act as a test participant, but that test
+      // must still create a persisted assessment session rather than falling
+      // back to the stateless /api/score endpoint.
+      if (authUser?.role === 'ADMIN' && !sessionId) {
+        void startAssessment()
+        return
+      }
+    }
     navigate(nextView)
   }
   const unlockResearch = () => {
@@ -548,9 +563,9 @@ function App() {
       <OnekoCat enabled={catPlayfulSurface && (screen === 'welcome' || screen === 'complete' || entryTransition || (screen === 'assessment' && view === 'assessment'))} transitioning={entryTransition} region={screen === 'assessment' && view === 'assessment' ? '[data-oneko-region]' : undefined} />
       <PlayfulInteractions enabled={catPlayfulSurface} />
       <header className="topbar">
-        <button className="brand brand-button" type="button" data-cursor="-text" data-cursor-text="回到开始" onClick={() => navigate('welcome')}><span className="brand-mark">✳</span><span>听见自己</span><small>留一点时间给自己</small></button>
+        <button className="brand brand-button" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '回到开始'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'sessions' : 'welcome')}><span className="brand-mark">✳</span><span>听见自己</span><small>留一点时间给自己</small></button>
         <div className="topbar-actions">
-          {screen === 'assessment' && <button className="header-quiet" type="button" data-cursor="-text" data-cursor-text="暂离" onClick={() => navigate('welcome')}>暂离</button>}
+          {screen === 'assessment' && <button className="header-quiet" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '暂离'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'sessions' : 'welcome')}>{authUser.role === 'ADMIN' ? '控制台' : '暂离'}</button>}
           <button className="header-quiet auth-user-button" type="button" onClick={() => void logout()} title={authUser.email}>{authUser.role === 'ADMIN' ? '管理员 · 退出' : '退出'}</button>
           <div className="top-status"><span className="status-dot" /> 只留在这里 <span className="divider" /> <span className="ai-status">{providerStatus?.mode === 'llm' ? `AI 已连接 · ${providerStatus.model}${providerStatus.session_intelligence === 'llm-advisory' ? ' · 会话编排已启用' : ''}` : 'AI 评分准备中'}</span><span className="divider" /> <span className="mono">PRIVATE SESSION</span></div>
         </div>
