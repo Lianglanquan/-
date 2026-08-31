@@ -106,6 +106,7 @@ class AdminApiTest(unittest.TestCase):
         detail = self.client.get(f'/api/admin/sessions/{session_id}')
         self.assertEqual(detail.status_code, 200, detail.text)
         payload = detail.json()
+        self.assertEqual(payload['email'], 'person@example.com')
         self.assertEqual(payload['items'][0]['question_id'], 'Q01')
         self.assertIn('session_intelligence', payload)
         self.assertIn('participant_handoff', payload)

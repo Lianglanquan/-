@@ -328,6 +328,8 @@ def admin_session(session_id: str, admin: dict[str, Any] = Depends(require_admin
         raise HTTPException(status_code=404, detail="assessment session not found") from exc
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
+    if value.get("user_id"):
+        value["email"] = next((user.get("email") for user in AUDIT.list_users() if user.get("id") == value.get("user_id")), None)
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_session")
     return value
 
