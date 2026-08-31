@@ -48,6 +48,21 @@ if [[ -e "$RELEASE" || -L "$RELEASE" ]]; then rm -rf "$RELEASE"; fi
 mv -T "$STAGING" "$RELEASE"
 ln -sfn "$RELEASE" "$APP_ROOT/current.next"
 mv -Tf "$APP_ROOT/current.next" "$CURRENT"
+if [[ -f "$CURRENT/deploy/systemd/qiuzheng.service" ]]; then
+  install -m 0644 "$CURRENT/deploy/systemd/qiuzheng.service" /etc/systemd/system/qiuzheng.service
+fi
+if [[ -f "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.service" ]]; then
+  install -m 0644 "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.service" /etc/systemd/system/qiuzheng-deploy-poller.service
+fi
+if [[ -f "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.timer" ]]; then
+  install -m 0644 "$CURRENT/deploy/systemd/qiuzheng-deploy-poller.timer" /etc/systemd/system/qiuzheng-deploy-poller.timer
+fi
+if [[ -f "$CURRENT/deploy/nginx/qiuzheng.xyz.conf" ]]; then
+  install -m 0644 "$CURRENT/deploy/nginx/qiuzheng.xyz.conf" /etc/nginx/sites-available/qiuzheng.xyz.conf
+  ln -sfn /etc/nginx/sites-available/qiuzheng.xyz.conf /etc/nginx/sites-enabled/qiuzheng.xyz.conf
+  nginx -t
+  systemctl reload nginx
+fi
 systemctl daemon-reload
 systemctl restart qiuzheng.service
 for _ in {1..30}; do

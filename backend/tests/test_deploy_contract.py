@@ -11,6 +11,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("SHARED_ROOT", script)
         self.assertIn("ln -sfn \"$SHARED_ROOT/data/derived\"", script)
         self.assertIn("previous release restored", script)
+        self.assertIn("/etc/nginx/sites-available/qiuzheng.xyz.conf", script)
 
     def test_workflow_deploys_only_from_main(self) -> None:
         workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
