@@ -37,6 +37,7 @@ test -f "$STAGING/backend/app/main.py"
 test -f "$STAGING/dist/index.html"
 ln -sfn "$SHARED_ROOT/data/derived" "$STAGING/data/derived"
 chown -R root:root "$STAGING"
+chmod -R u+rwX,go+rX "$STAGING"
 
 if [[ ! -x /srv/qiuzheng/venv/bin/python ]]; then
   python3 -m venv /srv/qiuzheng/venv

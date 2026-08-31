@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 APP_ROOT="${APP_ROOT:-/srv/qiuzheng}"
-REPOSITORY="${REPOSITORY:-$APP_ROOT/app}"
+REPOSITORY="${REPOSITORY:-$APP_ROOT/source}"
+REPOSITORY_URL="${REPOSITORY_URL:-https://github.com/Lianglanquan/-.git}"
 INCOMING="$APP_ROOT/incoming"
 REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-main}"
@@ -11,6 +12,10 @@ LOCK_FILE="$APP_ROOT/.deploy-poll.lock"
 exec 9>"$LOCK_FILE"
 flock -n 9 || exit 0
 install -d -m 0700 "$INCOMING"
+if [[ ! -d "$REPOSITORY/.git" ]]; then
+  install -d -m 0755 "$(dirname "$REPOSITORY")"
+  git clone --quiet "$REPOSITORY_URL" "$REPOSITORY"
+fi
 git config --global --add safe.directory "$REPOSITORY" 2>/dev/null || true
 git -C "$REPOSITORY" fetch --quiet "$REMOTE" "$BRANCH"
 target="$(git -C "$REPOSITORY" rev-parse "$REMOTE/$BRANCH")"

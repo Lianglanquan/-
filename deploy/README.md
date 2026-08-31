@@ -32,7 +32,7 @@ variables -> Actions**:
 
 | Secret | Value |
 | --- | --- |
-| `PROD_HOST` | `43.132.152.96` |
+| `PROD_HOST` | `49.233.148.91` |
 | `PROD_PORT` | `22` |
 | `PROD_USER` | `ubuntu` |
 | `PROD_SSH_KEY` | The private key whose public key is authorized for `ubuntu` |

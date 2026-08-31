@@ -7,5 +7,6 @@ Wants=network-online.target
 Type=oneshot
 User=root
 Environment=APP_ROOT=/srv/qiuzheng
-Environment=REPOSITORY=/srv/qiuzheng/app
+Environment=REPOSITORY=/srv/qiuzheng/source
+Environment=REPOSITORY_URL=https://github.com/Lianglanquan/-.git
 ExecStart=/srv/qiuzheng/current/deploy/scripts/poll-and-deploy.sh

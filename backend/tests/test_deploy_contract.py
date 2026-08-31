@@ -27,6 +27,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("listen 80", fallback)
         self.assertNotIn("ssl_certificate", fallback)
 
+    def test_poller_can_bootstrap_a_clean_checkout(self) -> None:
+        script = (ROOT / "deploy/scripts/poll-and-deploy.sh").read_text(encoding="utf-8")
+        unit = (ROOT / "deploy/systemd/qiuzheng-deploy-poller.service").read_text(encoding="utf-8")
+        self.assertIn('git clone', script)
+        self.assertIn('REPOSITORY_URL', script)
+        self.assertIn('/srv/qiuzheng/source', unit)
+        self.assertIn('https://github.com/Lianglanquan/-.git', unit)
+
 
 if __name__ == "__main__":
     unittest.main()
