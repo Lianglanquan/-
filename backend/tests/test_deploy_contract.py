@@ -16,6 +16,7 @@ class DeploymentContractTests(unittest.TestCase):
     def test_workflow_deploys_only_from_main(self) -> None:
         workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
         self.assertIn("branches: [main]", workflow)
+        self.assertIn("PROD_HOST: 49.233.148.91", workflow)
         self.assertIn("PROD_SSH_KEY", workflow)
         self.assertIn("concurrency:", workflow)
 

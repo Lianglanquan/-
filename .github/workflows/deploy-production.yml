@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      PROD_HOST: ${{ secrets.PROD_HOST }}
+      PROD_HOST: 49.233.148.91
       PROD_PORT: ${{ secrets.PROD_PORT || '22' }}
       PROD_USER: ${{ secrets.PROD_USER }}
       PROD_APP_ROOT: ${{ secrets.PROD_APP_ROOT || '/srv/qiuzheng' }}
