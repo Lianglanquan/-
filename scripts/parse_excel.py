@@ -9,7 +9,32 @@ from pathlib import Path
 
 import openpyxl
 
-QUESTION_CODES = ["A1", "A2", "A3", "A4", "A6", "B3", "B5", "C1", "C2", "C3", "C5", "D1", "D2", "D4", "D5", "D6", "E1", "E2", "E5", "E8"]
+# The source workbook stores the 20 prompts under an internal code system
+# whose column order does not match the Q01--Q20 rubric order.  Keep this
+# mapping explicit so answer text, legacy labels, and rubrics cannot drift.
+QUESTION_CODE_TO_ID = {
+    "A1": "Q09",
+    "A2": "Q08",
+    "A3": "Q10",
+    "A4": "Q14",
+    "A6": "Q13",
+    "B3": "Q01",
+    "B5": "Q20",
+    "C1": "Q02",
+    "C2": "Q04",
+    "C3": "Q05",
+    "C5": "Q03",
+    "D1": "Q11",
+    "D2": "Q12",
+    "D4": "Q15",
+    "D5": "Q06",
+    "D6": "Q07",
+    "E1": "Q18",
+    "E2": "Q17",
+    "E5": "Q19",
+    "E8": "Q16",
+}
+QUESTION_CODES = tuple(QUESTION_CODE_TO_ID)
 
 
 def _split(participant_id: str) -> str:
@@ -33,7 +58,7 @@ def parse_workbook(source: Path) -> list[dict]:
         participant_id = str(values[0] or "").strip()
         if not participant_id:
             continue
-        for position, source_code in enumerate(QUESTION_CODES):
+        for source_code in QUESTION_CODES:
             answer_col = question_codes.get(source_code)
             if answer_col is None:
                 continue
@@ -45,7 +70,7 @@ def parse_workbook(source: Path) -> list[dict]:
             records.append({
                 "response_id": f"{participant_id}:{source_code}",
                 "participant_id": participant_id,
-                "question_id": f"Q{position + 1:02d}",
+                "question_id": QUESTION_CODE_TO_ID[source_code],
                 "source_question_code": source_code,
                 "response": str(answer or "").strip(),
                 "legacy_score": int(score) if isinstance(score, (int, float)) and int(score) in (0, 1, 2) else None,

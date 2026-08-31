@@ -11,11 +11,11 @@ from fastapi import Cookie, Depends, Header, HTTPException, status
 from backend.app.audit.store import AuditStore
 from backend.app.auth.mailer import ResendMailer
 from backend.app.auth.service import AuthService
-from backend.app.config import ROOT, load_local_env
+from backend.app.config import ROOT, load_local_env, runtime_data_root
 
 
 SESSION_COOKIE = "qz_session"
-_AUDIT = AuditStore(ROOT / "data" / "derived" / "audit.sqlite3")
+_AUDIT = AuditStore(runtime_data_root() / "audit.sqlite3")
 _AUTH = AuthService(_AUDIT, mailer=ResendMailer())
 
 

@@ -1,0 +1,78 @@
+name: deploy-production
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROD_HOST: ${{ secrets.PROD_HOST }}
+      PROD_PORT: ${{ secrets.PROD_PORT }}
+      PROD_USER: ${{ secrets.PROD_USER }}
+      PROD_APP_ROOT: ${{ secrets.PROD_APP_ROOT || '/srv/qiuzheng' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package deployable release
+        id: package
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          stage="$(mktemp -d)"
+          git archive --format=tar --worktree-attributes HEAD | tar -xf - -C "$stage"
+          rm -rf "$stage/dist" "$stage/node_modules"
+          cp -a dist "$stage/dist"
+          rm -rf "$stage/data/raw" "$stage/data/derived"
+          tar -C "$stage" --exclude='.env*' --exclude='.git' -czf "release-${RELEASE_SHA}.tar.gz" .
+          echo "archive=release-${RELEASE_SHA}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$PROD_HOST" -a -n "$PROD_USER" -a -n "$PROD_PORT" -a -n "$SSH_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/qiuzheng_deploy
+          chmod 600 ~/.ssh/qiuzheng_deploy
+          ssh-keyscan -p "$PROD_PORT" -H "$PROD_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload and atomically deploy
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          ssh_cmd=(ssh -i ~/.ssh/qiuzheng_deploy -p "$PROD_PORT" "$PROD_USER@$PROD_HOST")
+          scp_cmd=(scp -i ~/.ssh/qiuzheng_deploy -P "$PROD_PORT")
+          "${ssh_cmd[@]}" "install -d -m 700 '$PROD_APP_ROOT/incoming'"
+          "${scp_cmd[@]}" "$ARCHIVE" deploy/scripts/prepare-server.sh deploy/scripts/deploy-release.sh "$PROD_USER@$PROD_HOST:$PROD_APP_ROOT/incoming/"
+          "${ssh_cmd[@]}" "sudo bash '$PROD_APP_ROOT/incoming/deploy-release.sh' '$PROD_APP_ROOT/incoming/$ARCHIVE' '$RELEASE_SHA'"
+
+      - name: Verify production
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 20 https://qiuzheng.xyz/health
+          curl --fail --silent --show-error --max-time 20 https://qiuzheng.xyz/ready

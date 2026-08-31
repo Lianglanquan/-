@@ -1,0 +1,80 @@
+import json
+import unittest
+from http.client import RemoteDisconnected
+from unittest.mock import patch
+
+from backend.app.scoring.llm import OpenAICompatibleScorer
+
+
+class _Response:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+
+class LLMRetryTest(unittest.TestCase):
+    def test_provider_retries_a_transient_failure_before_returning_score(self) -> None:
+        scorer = OpenAICompatibleScorer(
+            {"Q01": {"version": "1.0.0", "question": "情绪", "criteria": []}},
+            api_key="test",
+            base_url="https://kittyapi.xyz/v1",
+            model="gpt-5.6-terra",
+            timeout=1,
+            max_retries=1,
+            retry_backoff=0,
+        )
+        payload = {
+            "choices": [{"message": {"content": '{"preliminary_score":0,"rationale":"清楚","evidence_spans":[],"confidence":0.8,"evidence_sufficiency":"SUFFICIENT"}'}}]
+        }
+        calls = {"count": 0}
+
+        def request(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("temporary")
+            return _Response(payload)
+
+        with patch("backend.app.scoring.llm.urllib.request.urlopen", side_effect=request):
+            result = scorer.score("Q01", "平静")
+
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result.preliminary_score, 0)
+
+    def test_provider_retries_when_gateway_closes_connection(self) -> None:
+        scorer = OpenAICompatibleScorer(
+            {"Q01": {"version": "1.0.0", "question": "情绪", "criteria": []}},
+            api_key="test",
+            base_url="https://kittyapi.xyz/v1",
+            model="gpt-5.6-terra",
+            timeout=1,
+            max_retries=1,
+            retry_backoff=0,
+        )
+        payload = {
+            "choices": [{"message": {"content": '{"preliminary_score":0,"rationale":"清楚","evidence_spans":[],"confidence":0.8,"evidence_sufficiency":"SUFFICIENT"}'}}]
+        }
+        calls = {"count": 0}
+
+        def request(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise RemoteDisconnected("gateway closed connection")
+            return _Response(payload)
+
+        with patch("backend.app.scoring.llm.urllib.request.urlopen", side_effect=request):
+            result = scorer.score("Q01", "平静")
+
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(result.preliminary_score, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

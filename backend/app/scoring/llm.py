@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from http.client import RemoteDisconnected
 import urllib.error
 import urllib.request
 from typing import Any
@@ -47,12 +48,24 @@ def _json_content(value: str) -> dict[str, Any]:
 class OpenAICompatibleScorer:
     name = "openai-compatible-rubric"
 
-    def __init__(self, rubrics: dict[str, dict[str, Any]], *, api_key: str, base_url: str, model: str, timeout: int = 75) -> None:
+    def __init__(
+        self,
+        rubrics: dict[str, dict[str, Any]],
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: int = 75,
+        max_retries: int = 2,
+        retry_backoff: float = 0.8,
+    ) -> None:
         self.rubrics = rubrics
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.max_retries = max(0, int(max_retries))
+        self.retry_backoff = max(0.0, float(retry_backoff))
 
     @property
     def version(self) -> str:
@@ -96,11 +109,22 @@ class OpenAICompatibleScorer:
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as handle:
-                body = json.loads(handle.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise LLMUnavailable("provider request failed") from exc
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as handle:
+                    body = json.loads(handle.read().decode("utf-8"))
+                break
+            except (urllib.error.URLError, RemoteDisconnected, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if attempt >= self.max_retries:
+                    raise LLMUnavailable("provider request failed") from exc
+                if self.retry_backoff:
+                    import time
+
+                    time.sleep(self.retry_backoff * (attempt + 1))
+        else:
+            raise LLMUnavailable("provider request failed") from last_error
         try:
             content = body["choices"][0]["message"]["content"]
             data = _json_content(content)
@@ -237,11 +261,26 @@ def configured_scorer(rubrics: dict[str, dict[str, Any]]) -> tuple[Any, str]:
     # participant responses to leave the local research environment.
     allow_external = os.getenv("ALLOW_EXTERNAL_SCORING", "false").strip().lower() in {"1", "true", "yes", "on"}
     if provider in {"llm", "openai", "openai-compatible"} and api_key and allow_external:
+        try:
+            timeout = max(1, int(os.getenv("OPENAI_TIMEOUT", "75")))
+        except ValueError:
+            timeout = 75
+        try:
+            max_retries = max(0, int(os.getenv("OPENAI_MAX_RETRIES", "2")))
+        except ValueError:
+            max_retries = 2
+        try:
+            retry_backoff = max(0.0, float(os.getenv("OPENAI_RETRY_BACKOFF", "0.8")))
+        except ValueError:
+            retry_backoff = 0.8
         return OpenAICompatibleScorer(
             rubrics,
             api_key=api_key,
             base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
             model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_backoff=retry_backoff,
         ), "llm"
     if provider in {"centroid", "supervised", "research-baseline", "auto", "llm", "openai", "openai-compatible"}:
         model_path = Path(__file__).resolve().parents[3] / "models" / "supervised" / "char_centroid_v1.json"
@@ -261,4 +300,6 @@ def score_with_configured_provider(question_id: str, response: str, rubrics: dic
             return provider.score(question_id, response), mode
         except LLMUnavailable:
             pass
-    return score_response(question_id, response, rubrics), "deterministic-fallback"
+    fallback = score_response(question_id, response, rubrics)
+    fallback.decision_reasons = list(dict.fromkeys([*fallback.decision_reasons, "PROVIDER_FALLBACK"]))
+    return fallback, "deterministic-fallback"

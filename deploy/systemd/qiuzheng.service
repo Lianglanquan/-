@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/srv/qiuzheng/app
+WorkingDirectory=/srv/qiuzheng/current
 EnvironmentFile=/etc/qiuzheng/qiuzheng.env
 ExecStart=/srv/qiuzheng/venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 2
 Restart=on-failure
@@ -16,7 +16,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/srv/qiuzheng/app/data/derived
+ReadWritePaths=/srv/qiuzheng/shared/data/derived /srv/qiuzheng/shared/logs
 
 [Install]
 WantedBy=multi-user.target

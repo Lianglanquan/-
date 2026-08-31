@@ -18,7 +18,7 @@ from backend.app.assessment.reporting import build_population_summary
 from backend.app.audit.store import AuditStore
 from backend.app.auth.mailer import MailDeliveryError, ResendMailer
 from backend.app.auth.service import AuthError, AuthService
-from backend.app.config import load_local_env
+from backend.app.config import load_local_env, runtime_data_root
 from backend.app.safety.engine import screen
 from backend.app.scoring.engine import evidence_gap, load_rubrics, score_response
 from backend.app.scoring.llm import configured_scorer, score_with_configured_provider
@@ -33,7 +33,8 @@ from backend.app.security import (
 
 ROOT = Path(__file__).resolve().parents[3]
 RUBRICS = load_rubrics(ROOT)
-AUDIT = AuditStore(ROOT / "data" / "derived" / "audit.sqlite3")
+RUNTIME_DATA = runtime_data_root()
+AUDIT = AuditStore(RUNTIME_DATA / "audit.sqlite3")
 SCORER, SCORER_MODE = configured_scorer(RUBRICS)
 STORE = AssessmentStore(RUBRICS, scorer=SCORER, audit=AUDIT, root=ROOT)
 AUTH = AuthService(AUDIT, mailer=ResendMailer())
@@ -332,7 +333,7 @@ def admin_session(session_id: str, admin: dict[str, Any] = Depends(require_admin
 
 
 def _records() -> list[dict[str, Any]]:
-    path = ROOT / "data" / "derived" / "responses.jsonl"
+    path = RUNTIME_DATA / "responses.jsonl"
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -392,7 +393,7 @@ def research_summary(_: str = Depends(require_research_access)) -> dict[str, Any
         candidates = sum(evidence_gap(question_id, r.get("response", ""), RUBRICS.get(question_id, {})) is not None for r in subset)
         questions_summary.append({"id": question_id, "n": len(subset), "mean_score": round(sum(r["legacy_score"] for r in subset) / len(subset), 2), "provisional_candidates": candidates})
     evaluation = {}
-    evaluation_path = ROOT / "data" / "derived" / "evaluation.json"
+    evaluation_path = RUNTIME_DATA / "evaluation.json"
     if evaluation_path.exists():
         evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
     population = build_population_summary(records)
@@ -450,5 +451,5 @@ def export_adjudications(_: str = Depends(require_research_access)) -> dict[str,
     reviewed dataset/model/rubric evolution cycle, not an automatic retrain.
     """
 
-    path = ROOT / "data" / "derived" / "adjudicated_dataset.jsonl"
+    path = RUNTIME_DATA / "adjudicated_dataset.jsonl"
     return AUDIT.export_adjudicated_dataset(path)

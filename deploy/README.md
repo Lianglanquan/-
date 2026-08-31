@@ -2,10 +2,11 @@
 
 The production shape is deliberately small and reversible:
 
-- Nginx serves the Vite `dist/` bundle and proxies `/api/*` plus `/health` to Uvicorn.
+- Nginx serves the Vite `dist/` bundle from `/srv/qiuzheng/current` and proxies `/api/*` plus `/health` to Uvicorn.
 - Uvicorn runs as the unprivileged `ubuntu` user under systemd on `127.0.0.1:8000`.
 - Runtime secrets live only in `/etc/qiuzheng/qiuzheng.env`; never commit them.
-- Runtime SQLite/audit files stay under `data/derived/` and are excluded from Git.
+- `/srv/qiuzheng/releases` contains code releases; `/srv/qiuzheng/current` is the atomically switched active release.
+- `/srv/qiuzheng/shared/data/derived` contains the SQLite audit database and runtime exports. It is never replaced by a release.
 
 Authentication must be configured before opening the service to participants:
 
@@ -21,6 +22,37 @@ AUTH_COOKIE_SECURE=true
 email is a participant and can only read its own assessment sessions. Keep the
 Resend key only in the server environment file; rotate it if it has ever been
 shared in chat, shell history, or screenshots.
+
+## Automatic production deployment
+
+The `deploy-production` workflow runs only after a push to `main`. Pull requests
+run the reusable verification workflow but never touch the server. Configure
+these repository Actions secrets once under **Settings -> Secrets and
+variables -> Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `PROD_HOST` | `43.132.152.96` |
+| `PROD_PORT` | `22` |
+| `PROD_USER` | `ubuntu` |
+| `PROD_SSH_KEY` | The private key whose public key is authorized for `ubuntu` |
+| `PROD_APP_ROOT` | `/srv/qiuzheng` |
+
+The deploy key is used only by Actions and is never committed to the
+repository. The first server bootstrap can be run once with:
+
+```bash
+sudo bash deploy/scripts/prepare-server.sh /srv/qiuzheng /srv/qiuzheng/shared
+```
+
+Each release is health-checked before activation. If `/ready` does not become
+healthy, the previous `current` release is restored automatically. To inspect
+the active release and data location:
+
+```bash
+readlink -f /srv/qiuzheng/current
+ls -l /srv/qiuzheng/shared/data/derived/audit.sqlite3
+```
 
 Before creating a release commit or a public demo image, clear local test
 sessions with the guarded command below. It does not touch `data/raw/`:

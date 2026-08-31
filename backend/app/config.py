@@ -44,4 +44,19 @@ def env_list(name: str, default: tuple[str, ...] = ()) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def runtime_data_root() -> Path:
+    """Return the writable runtime directory, separate from release code.
+
+    Production sets an absolute ``QIUZHENG_DATA_ROOT`` under the persistent
+    server volume. Local development keeps the repository's historical
+    ``data/derived`` default so existing scripts and tests remain compatible.
+    """
+
+    configured = os.getenv("QIUZHENG_DATA_ROOT", "").strip()
+    if not configured:
+        return ROOT / "data" / "derived"
+    path = Path(configured).expanduser()
+    return path if path.is_absolute() else ROOT / path
+
+
 load_local_env()

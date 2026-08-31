@@ -6,6 +6,9 @@ data/derived/audit.sqlite3
 data/derived/audit.sqlite3-*
 data/derived/adjudicated_dataset.jsonl
 data/derived/real_survey/
+data/derived/debug_experiment*/
+data/derived/*.sqlite3-shm
+data/derived/*.sqlite3-wal
 data/raw/*
 !data/raw/.gitkeep
 __pycache__/

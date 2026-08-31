@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from backend.app.audit.store import AuditStore
+from backend.app.config import runtime_data_root
 from backend.app.assessment.intelligence import SessionAIAdvisor, apply_ai_planning, build_participant_handoff
 from backend.app.assessment.orchestrator import build_global_evidence_state, infer_probe_type
 from backend.app.assessment.probes import default_cat_probe
@@ -29,7 +30,11 @@ class AssessmentStore:
         self.rubrics = rubrics
         self.scorer = scorer
         workspace = root or Path(__file__).resolve().parents[3]
-        self.audit = audit or AuditStore(workspace / "data" / "derived" / "audit.sqlite3")
+        if audit is not None:
+            self.audit = audit
+        else:
+            data_root = runtime_data_root() if root is None else workspace / "data" / "derived"
+            self.audit = AuditStore(data_root / "audit.sqlite3")
         self.ai_advisor = ai_advisor or SessionAIAdvisor(scorer)
 
     def start(self, user_id: str | None = None) -> dict[str, Any]:
