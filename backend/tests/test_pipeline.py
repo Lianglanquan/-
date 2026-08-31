@@ -11,6 +11,7 @@ from backend.app.assessment.service import AssessmentStore
 from backend.app.safety.engine import screen
 from backend.app.scoring.centroid import CentroidScorer
 from backend.app.scoring.engine import load_rubrics, score_response
+from backend.app.scoring.providers import DeterministicBaseline
 from backend.app.security import require_research_access
 
 
@@ -400,6 +401,7 @@ class PipelineTest(unittest.TestCase):
             audit = AuditStore(Path(directory) / "audit.sqlite3")
             store = AssessmentStore(
                 self.rubrics,
+                scorer=DeterministicBaseline(self.rubrics),
                 audit=audit,
                 root=Path(__file__).resolve().parents[2],
                 ai_advisor=SessionAIAdvisor(FakeSessionModel()),

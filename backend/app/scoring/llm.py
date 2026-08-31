@@ -165,6 +165,7 @@ class OpenAICompatibleScorer:
                 target_gap=str(gap) if gap else None,
                 clarification_question=str(question) if question else None,
                 rubric_version=str(self.rubrics.get(question_id, {}).get("version", "unknown")),
+                probe_type=probe_type,
                 cat_probe=cat_probe,
             )
         except (KeyError, TypeError, ValueError) as exc:

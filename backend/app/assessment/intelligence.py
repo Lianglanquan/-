@@ -373,6 +373,23 @@ def apply_ai_planning(state: dict[str, Any], advice: dict[str, Any]) -> dict[str
                 ),
                 None,
             )
+            # The deterministic scorer can leave a semantic gap classified as
+            # generic CLARIFICATION while the session analyst distinguishes it
+            # more precisely (for example DISAMBIGUATION).  The recommendation
+            # is still bounded to the already-selected pending node; carrying
+            # its validated probe type keeps the participant payload and
+            # follow-up validation in sync.
+            if matching_probe is None and recommendation.get("probe_type") in VALID_PROBE_TYPES:
+                matching_probe = next(
+                    (
+                        probe for probe in advice.get("probe_recommendations", [])
+                        if probe.get("question_id") == selected_qid
+                        and probe.get("probe_type") == recommendation.get("probe_type")
+                    ),
+                    None,
+                )
+                if matching_probe:
+                    base_action["probe_type"] = recommendation["probe_type"]
             if recommendation.get("question"):
                 base_action["question"] = recommendation["question"]
             if recommendation.get("rationale"):
