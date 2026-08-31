@@ -9,6 +9,7 @@ class PollerContractTests(unittest.TestCase):
     def test_poller_tracks_main_and_uses_release_deployer(self) -> None:
         script = (ROOT / "deploy/scripts/poll-and-deploy.sh").read_text(encoding="utf-8")
         self.assertIn('BRANCH="${BRANCH:-main}"', script)
+        self.assertIn("safe.directory", script)
         self.assertIn("git -C \"$REPOSITORY\" fetch", script)
         self.assertIn("deploy-release.sh", script)
         self.assertIn(":(exclude)data/raw", script)

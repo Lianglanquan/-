@@ -11,6 +11,7 @@ LOCK_FILE="$APP_ROOT/.deploy-poll.lock"
 exec 9>"$LOCK_FILE"
 flock -n 9 || exit 0
 install -d -m 0700 "$INCOMING"
+git config --global --add safe.directory "$REPOSITORY" 2>/dev/null || true
 git -C "$REPOSITORY" fetch --quiet "$REMOTE" "$BRANCH"
 target="$(git -C "$REPOSITORY" rev-parse "$REMOTE/$BRANCH")"
 active="$(readlink -f "$APP_ROOT/current" 2>/dev/null || true)"
