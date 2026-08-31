@@ -18,9 +18,9 @@ jobs:
     timeout-minutes: 15
     env:
       PROD_HOST: 49.233.148.91
-      PROD_PORT: ${{ secrets.PROD_PORT || '22' }}
-      PROD_USER: ${{ secrets.PROD_USER }}
-      PROD_APP_ROOT: ${{ secrets.PROD_APP_ROOT || '/srv/qiuzheng' }}
+      PROD_PORT: 22
+      PROD_USER: ubuntu
+      PROD_APP_ROOT: /srv/qiuzheng
     steps:
       - uses: actions/checkout@v4
 
@@ -55,9 +55,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ -z "$PROD_HOST" || -z "$PROD_USER" || -z "$SSH_KEY" ]]; then
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::PROD_* secrets are not configured; server poller remains the deployment path."
-            exit 0
+            echo "::error::PROD_SSH_KEY must be configured before production deployment can run."
+            exit 1
           fi
           echo "available=true" >> "$GITHUB_OUTPUT"
           install -d -m 700 ~/.ssh

@@ -18,6 +18,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("branches: [main]", workflow)
         self.assertIn("PROD_HOST: 49.233.148.91", workflow)
         self.assertIn("PROD_SSH_KEY", workflow)
+        self.assertIn("PROD_SSH_KEY must be configured", workflow)
         self.assertIn("concurrency:", workflow)
 
     def test_release_script_bootstraps_http_when_certificate_is_not_ready(self) -> None:
