@@ -14,7 +14,7 @@ flock -n 9 || exit 0
 install -d -m 0700 "$INCOMING"
 if [[ ! -d "$REPOSITORY/.git" ]]; then
   install -d -m 0755 "$(dirname "$REPOSITORY")"
-  git clone --quiet "$REPOSITORY_URL" "$REPOSITORY"
+  git clone --quiet --depth 1 --single-branch --branch "$BRANCH" "$REPOSITORY_URL" "$REPOSITORY"
 fi
 git config --global --add safe.directory "$REPOSITORY" 2>/dev/null || true
 git -C "$REPOSITORY" fetch --quiet "$REMOTE" "$BRANCH"

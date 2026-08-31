@@ -31,6 +31,7 @@ class DeploymentContractTests(unittest.TestCase):
         script = (ROOT / "deploy/scripts/poll-and-deploy.sh").read_text(encoding="utf-8")
         unit = (ROOT / "deploy/systemd/qiuzheng-deploy-poller.service").read_text(encoding="utf-8")
         self.assertIn('git clone', script)
+        self.assertIn('--depth 1', script)
         self.assertIn('REPOSITORY_URL', script)
         self.assertIn('/srv/qiuzheng/source', unit)
         self.assertIn('https://github.com/Lianglanquan/-.git', unit)
