@@ -9,6 +9,9 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      ALLOW_EXTERNAL_SCORING: 'false'
+      SCORING_PROVIDER: centroid
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
