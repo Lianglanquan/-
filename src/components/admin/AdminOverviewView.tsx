@@ -1,4 +1,5 @@
 import type { AdminSessionSummary } from './AdminSessionsView'
+import WorkflowTrail from './WorkflowTrail'
 
 export type AdminReviewPriority = {
   session_id: string
@@ -33,7 +34,7 @@ type Props = {
   syncing: boolean
   message: string
   onRefresh: () => Promise<void>
-  onOpenSession: (sessionId: string) => void
+  onOpenSession: (sessionId: string, questionId?: string | null) => void
   onOpenReview: () => void
   onStartTest: () => void
   onMembers: () => void
@@ -56,6 +57,7 @@ export default function AdminOverviewView({ overview, loading, syncing, message,
   const recent = overview?.recent_sessions ?? []
 
   return <div className="detail-view admin-overview-view">
+    <WorkflowTrail active="overview" />
     <section className="admin-overview-hero">
       <div>
         <div className="eyebrow"><span>ASSESSMENT OVERVIEW</span><span className="eyebrow-line" /><span>证据优先</span></div>
@@ -85,7 +87,7 @@ export default function AdminOverviewView({ overview, loading, syncing, message,
       <section className="admin-priority-panel">
         <div className="section-heading"><div><strong>优先复核</strong><small>按证据缺口、冲突和构念位置排序</small></div><button type="button" onClick={onOpenReview}>进入专家工作台 →</button></div>
         <div className="admin-priority-list">
-          {priorities.slice(0, 6).map((item, index) => <button type="button" key={`${item.session_id}-${item.question_id}-${index}`} onClick={() => onOpenSession(item.session_id)}>
+          {priorities.slice(0, 6).map((item, index) => <button type="button" key={`${item.session_id}-${item.question_id}-${index}`} onClick={() => onOpenSession(item.session_id, item.question_id)}>
             <span className="priority-rank">{String(index + 1).padStart(2, '0')}</span>
             <div><strong>{item.email || '未关联邮箱'} · {item.question_id || '会话节点'}</strong><p>{item.target_gap || '这部分证据仍需要专业人员结合原话判断。'}</p><small>{Number(item.support_count || 0)} 处支持 · {Number(item.conflict_count || 0)} 处冲突</small></div>
             <span className="priority-score">{Math.round(Number(item.priority || 0) * 100)}</span>

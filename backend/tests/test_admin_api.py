@@ -161,6 +161,49 @@ class AdminApiTest(unittest.TestCase):
         audit = self.client.get('/api/admin/audit').json()
         self.assertTrue(any(row['resource'] == 'assessment_report' and row['session_id'] == session_id for row in audit))
 
+    def test_admin_session_review_round_trip_updates_the_same_report(self) -> None:
+        self._register('owner@example.com')
+        participant = self._register('person@example.com')
+        self._login('person@example.com')
+        started = self.client.post('/api/assessment/start')
+        self.assertEqual(started.status_code, 200, started.text)
+        session_id = started.json()['id']
+        submitted = self.client.post(
+            f'/api/assessment/{session_id}/responses',
+            json={'question_id': 'Q16', 'response': '责任'},
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        self.audit.set_session_status(session_id, 'AWAITING_REVIEW')
+        self.client.post('/api/auth/logout')
+        self._login('owner@example.com')
+
+        case_response = self.client.get(f'/api/admin/sessions/{session_id}/review/Q16')
+        self.assertEqual(case_response.status_code, 200, case_response.text)
+        case = case_response.json()
+        self.assertEqual(case['session_id'], session_id)
+        self.assertEqual(case['question_id'], 'Q16')
+        self.assertEqual(case['source'], 'session')
+
+        adjudication = self.client.post(
+            f'/api/admin/sessions/{session_id}/review/Q16',
+            json={'adjudicated_score': 1, 'evidence_sufficiency': 'SUFFICIENT', 'note': '结合原话，方向已确认。'},
+        )
+        self.assertEqual(adjudication.status_code, 200, adjudication.text)
+        payload = adjudication.json()
+        self.assertEqual(payload['review']['status'], 'ADJUDICATED')
+        self.assertEqual(payload['session_id'], session_id)
+        self.assertEqual(payload['report']['session_id'], session_id)
+        q16 = next(row for row in payload['report']['item_matrix'] if row['question_id'] == 'Q16')
+        self.assertEqual(q16['score']['effective'], 1)
+        self.assertEqual(q16['review']['status'], 'ADJUDICATED')
+        self.assertFalse(any(row['question_id'] == 'Q16' for row in payload['report']['review_queue']))
+
+        refreshed = self.client.get(f'/api/admin/sessions/{session_id}/report')
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        refreshed_q16 = next(row for row in refreshed.json()['item_matrix'] if row['question_id'] == 'Q16')
+        self.assertEqual(refreshed_q16['score']['preliminary'], submitted.json()['score']['preliminary_score'])
+        self.assertEqual(refreshed_q16['score']['effective'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

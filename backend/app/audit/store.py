@@ -592,6 +592,45 @@ class AuditStore:
         }
         return case
 
+    def ensure_session_review_case(self, session_id: str, question_id: str) -> dict[str, Any] | None:
+        """Materialize a session node as an expert case when an admin opens it.
+
+        Session events remain append-only.  This helper only creates the
+        review-queue projection needed to give an unresolved report node a
+        stable adjudication target.  Existing adjudications are preserved by
+        ``upsert_review_case``.
+        """
+
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        latest = next((item for item in reversed(session.get("items", [])) if item.get("question_id") == question_id), None)
+        if not latest:
+            return None
+        score = latest.get("score") or {}
+        payload = {
+            "score": score,
+            "safety": latest.get("safety") or {"state": "CLEAR"},
+            "probe_type": latest.get("probe_type"),
+            "source_response": latest.get("response", ""),
+        }
+        self.upsert_review_case({
+            "response_id": f"session:{session_id}:{question_id}",
+            "source": "session",
+            "participant_id": session.get("user_id"),
+            "session_id": session_id,
+            "event_id": latest.get("event_id"),
+            "question_id": question_id,
+            "response": latest.get("response", ""),
+            "preliminary_score": score.get("preliminary_score"),
+            "score_status": score.get("score_status"),
+            "evidence_sufficiency": score.get("evidence_sufficiency", "UNASSESSED"),
+            "safety_state": (latest.get("safety") or {}).get("state", "CLEAR"),
+            "reason_codes": score.get("decision_reasons", []),
+            "payload": payload,
+        })
+        return self.get_review_case(f"session:{session_id}:{question_id}")
+
     def record_review(self, response_id: str, *, adjudicated_score: int | None, evidence_sufficiency: str, note: str, reviewer: str) -> dict[str, Any]:
         existing = self.get_review_case(response_id)
         if not existing:

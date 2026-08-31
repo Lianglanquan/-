@@ -7,6 +7,7 @@ import AuthFlow, { AuthUser } from './components/auth/AuthFlow'
 import AdminMembersView, { AdminMember } from './components/admin/AdminMembersView'
 import AdminSessionsView, { AdminSessionDetail, AdminSessionSummary } from './components/admin/AdminSessionsView'
 import AdminOverviewView, { AdminOverview } from './components/admin/AdminOverviewView'
+import WorkflowTrail from './components/admin/WorkflowTrail'
 
 type Criterion = { score: number; description: string; examples: string[] }
 type Question = { id: string; question: string; dimension: string; criteria: Criterion[] }
@@ -53,6 +54,7 @@ type NextAction = {
   priority?: number
   rationale?: string
 }
+type ReviewContext = { sessionId: string; questionId: string }
 type GlobalEvidenceState = {
   version: string
   seed_total: number
@@ -204,6 +206,9 @@ function App() {
   const [adminOverviewLoading, setAdminOverviewLoading] = useState(false)
   const [adminOverviewSyncing, setAdminOverviewSyncing] = useState(false)
   const [adminOverviewMessage, setAdminOverviewMessage] = useState('')
+  const [adminFocusQuestionId, setAdminFocusQuestionId] = useState<string | null>(null)
+  const [reviewContext, setReviewContext] = useState<ReviewContext | null>(null)
+  const [exportMessage, setExportMessage] = useState('')
   const adminSessionsInFlight = useRef(false)
   const adminOverviewInFlight = useRef(false)
   const adminDetailInFlight = useRef<string | null>(null)
@@ -310,8 +315,9 @@ function App() {
     }
   }, [authUser?.role])
 
-  const openAdminSession = useCallback(async (id: string) => {
+  const openAdminSession = useCallback(async (id: string, focusQuestionId?: string | null) => {
     if (authUser?.role !== 'ADMIN' || adminDetailInFlight.current === id) return
+    setAdminFocusQuestionId(focusQuestionId === undefined ? null : focusQuestionId)
     adminDetailInFlight.current = id
     const requestId = ++adminDetailRequest.current
     setAdminSessionDetailLoading(true)
@@ -333,13 +339,38 @@ function App() {
     }
   }, [authUser?.role])
 
+  const openReviewContext = useCallback((sessionId: string, questionId: string) => {
+    setReviewContext({ sessionId, questionId })
+    navigate('review')
+  }, [])
+
+  const returnToSessionReport = useCallback(async (sessionId: string, questionId?: string) => {
+    setReviewContext(null)
+    await openAdminSession(sessionId, questionId ?? null)
+    await refreshAdminSessions()
+    await refreshAdminOverview(true)
+    navigate('sessions')
+  }, [openAdminSession, refreshAdminOverview, refreshAdminSessions])
+
+  const exportAdjudications = useCallback(async () => {
+    setExportMessage('正在整理专家确认记录…')
+    try {
+      const response = await fetch('/api/research/adjudications/export', { method: 'POST', credentials: 'include' })
+      const payload = await response.json().catch(() => ({})) as { records?: number; detail?: string }
+      if (!response.ok) throw new Error(payload.detail || '导出暂时没有完成。')
+      setExportMessage(`已导出 ${Number(payload.records ?? 0)} 条专家确认记录，可在研究台作为 Rubric / 模型迭代的输入。`)
+    } catch (error) {
+      setExportMessage(error instanceof Error ? error.message : '导出暂时没有完成。')
+    }
+  }, [])
+
   useEffect(() => {
     if (authUser?.role !== 'ADMIN' || !['sessions', 'overview'].includes(view)) return
     const sync = () => {
       if (document.visibilityState !== 'visible') return
       if (view === 'overview') void refreshAdminOverview(hasAdminOverview)
       void refreshAdminSessions()
-      if (adminSessionDetail?.id) void openAdminSession(adminSessionDetail.id)
+      if (adminSessionDetail?.id) void openAdminSession(adminSessionDetail.id, adminFocusQuestionId)
     }
     sync()
     const timer = window.setInterval(sync, 30000)
@@ -349,7 +380,7 @@ function App() {
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [adminSessionDetail?.id, authUser?.role, hasAdminOverview, openAdminSession, refreshAdminOverview, refreshAdminSessions, view])
+  }, [adminFocusQuestionId, adminSessionDetail?.id, authUser?.role, hasAdminOverview, openAdminSession, refreshAdminOverview, refreshAdminSessions, view])
 
   const refreshReviewCases = async () => {
     if (authUser?.role !== 'ADMIN') return
@@ -631,17 +662,17 @@ function App() {
               {([['assessment', '继续']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
             </div>
             <div className="research-tabs">
-              {authUser.role === 'ADMIN' && <><span className="research-label">管理员空间</span>{([['overview', '评估总览'], ['research', '研究台'], ['review', '专家工作'], ['sessions', '评估会话'], ['members', '成员与权限']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
+              {authUser.role === 'ADMIN' && <><span className="research-label">管理员空间</span>{([['overview', '评估总览'], ['sessions', '评估会话'], ['review', '专家复核'], ['research', '研究数据'], ['members', '成员权限']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
             </div>
           </nav>
           {view === 'assessment' && <ParticipantFlow initialStage="question" suppressProbe={completionHandoff} onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
           {view === 'evidence' && <EvidenceView question={question} result={currentResult} response={response} globalEvidence={globalEvidence} />}
-          {view === 'overview' && authUser.role === 'ADMIN' && <AdminOverviewView overview={adminOverview} loading={adminOverviewLoading} syncing={adminOverviewSyncing} message={adminOverviewMessage} onRefresh={() => refreshAdminOverview(false)} onOpenSession={(id) => { void openAdminSession(id); navigate('sessions') }} onOpenReview={() => navigate('review')} onStartTest={() => { void startAssessment() }} onMembers={() => navigate('members')} />}
-          {view === 'research' && <ResearchView summary={summary} distribution={scoreDistribution} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
-          {view === 'review' && <ReviewView cases={cases} token={researchToken} onReviewed={refreshReviewCases} onLoadMore={loadMoreReviewCases} hasMore={reviewHasMore} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
+          {view === 'overview' && authUser.role === 'ADMIN' && <AdminOverviewView overview={adminOverview} loading={adminOverviewLoading} syncing={adminOverviewSyncing} message={adminOverviewMessage} onRefresh={() => refreshAdminOverview(false)} onOpenSession={(id, questionId) => { void openAdminSession(id, questionId); navigate('sessions') }} onOpenReview={() => navigate('review')} onStartTest={() => { void startAssessment() }} onMembers={() => navigate('members')} />}
+          {view === 'research' && <ResearchView summary={summary} distribution={scoreDistribution} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} exportMessage={exportMessage} onExport={exportAdjudications} />}
+          {view === 'review' && <ReviewView cases={cases} token={researchToken} context={reviewContext} onReviewed={refreshReviewCases} onReturnToSession={returnToSessionReport} onLoadMore={loadMoreReviewCases} hasMore={reviewHasMore} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'replay' && <ReplayView submitted={submitted} questions={questions} />}
           {view === 'members' && authUser.role === 'ADMIN' && <AdminMembersView members={members} currentUserId={authUser.id} loading={membersLoading} message={membersMessage} onInvite={inviteMember} onRoleChange={changeMemberRole} onActiveChange={changeMemberActive} onRefresh={refreshMembers} />}
-          {view === 'sessions' && authUser.role === 'ADMIN' && <AdminSessionsView sessions={adminSessions} selected={adminSessionDetail} loading={adminSessionsLoading} detailLoading={adminSessionDetailLoading} message={adminSessionsMessage} onRefresh={refreshAdminSessions} onSelect={openAdminSession} onReview={() => navigate('review')} />}
+          {view === 'sessions' && authUser.role === 'ADMIN' && <AdminSessionsView sessions={adminSessions} selected={adminSessionDetail} focusedQuestionId={adminFocusQuestionId} loading={adminSessionsLoading} detailLoading={adminSessionDetailLoading} message={adminSessionsMessage} exportMessage={exportMessage} onRefresh={refreshAdminSessions} onSelect={openAdminSession} onReview={openReviewContext} onExport={exportAdjudications} />}
         </section>
       </div>}
     </main>
@@ -973,8 +1004,8 @@ function ResearchAccessBar({ tokenDraft, setTokenDraft, onUnlock, ready, loading
   </div>
 }
 
-function ResearchView({ summary, distribution, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { summary: ResearchSummary; distribution: Array<{ score: number; count: number }>; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
-  if (!ready) return <div className="detail-view research-view"><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>PROTECTED</span></div><h2>研究空间需要口令</h2><p className="view-intro">历史回答、评估指标和复核队列只对研究人员开放。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /></div>
+function ResearchView({ summary, distribution, tokenDraft, setTokenDraft, onUnlock, ready, loading, exportMessage, onExport }: { summary: ResearchSummary; distribution: Array<{ score: number; count: number }>; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean; exportMessage: string; onExport: () => Promise<void> }) {
+  if (!ready) return <div className="detail-view research-view"><WorkflowTrail active="research" /><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>PROTECTED</span></div><h2>研究空间需要口令</h2><p className="view-intro">历史回答、评估指标和复核队列只对研究人员开放。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /></div>
   const max = Math.max(...distribution.map((item) => item.count))
   const evaluation = (summary.evaluation ?? {}) as Record<string, unknown>
   const testMetrics = (evaluation.test ?? {}) as Record<string, unknown>
@@ -983,33 +1014,68 @@ function ResearchView({ summary, distribution, tokenDraft, setTokenDraft, onUnlo
   const metric = (value: unknown, suffix = '') => typeof value === 'number' ? `${(value * (suffix === '%' ? 100 : 1)).toFixed(suffix === '%' ? 1 : 3)}${suffix}` : '—'
   const riskCounts = summary.risk_counts ?? {}
   const riskLabels: Array<[string, string]> = [['LOW', '低关注'], ['MODERATE', '中关注'], ['HIGH', '高关注'], ['INCOMPLETE', '未完成'], ['SAFETY_REVIEW', '安全复核']]
-  return <div className="detail-view research-view"><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>LOCKED PARTICIPANT SPLIT</span></div><h2>数据决定架构</h2><p className="view-intro">历史人工标签永久保留为 legacy_score；证据充分性是独立标注轴。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /><div className="metric-grid"><div><span className="box-kicker">参与者</span><strong>{summary.participants}</strong><small>participant-level split</small></div><div><span className="box-kicker">逐题回答</span><strong>{summary.responses.toLocaleString()}</strong><small>20 seed probes</small></div><div><span className="box-kicker">test participants</span><strong>{summary.splits.test}</strong><small>no leakage across questions</small></div><div><span className="box-kicker">待复核候选</span><strong>{summary.questions.reduce((sum, item) => sum + item.provisional_candidates, 0)}</strong><small>item-aware evidence gaps</small></div></div><section className="population-report"><div className="section-heading"><strong>群体描述性统计</strong><span>{summary.risk_rule_version || 'research-band-v1'}</span></div><div className="population-report-metrics"><div><span>整体平均题分</span><strong>{typeof summary.overall_mean_score === 'number' ? summary.overall_mean_score.toFixed(3) : '—'}</strong></div>{riskLabels.map(([key, label]) => <div key={key}><span>{label}</span><strong>{Number(riskCounts[key] ?? 0).toLocaleString()}</strong><small>人</small></div>)}</div><p>{summary.risk_disclaimer || '研究规则分层，仅用于群体描述性统计。'}</p></section><div className="research-evaluation"><div><span>TEST ACCURACY</span><strong>{metric(testMetrics.accuracy, '%')}</strong></div><div><span>MACRO-F1</span><strong>{metric(testMetrics.macro_f1)}</strong></div><div><span>SELECTIVE COVERAGE</span><strong>{metric(selectiveTest.coverage, '%')}</strong></div><div><span>覆盖集 ACC</span><strong>{metric(selectiveTest.accuracy_on_covered, '%')}</strong></div><div><span>CLARIFICATIONS</span><strong>{String(runtime.clarifications ?? 0)}</strong></div><div><span>HUMAN REVIEW</span><strong>{String(runtime.human_review_events ?? 0)}</strong></div></div><div className="research-columns"><section className="chart-section"><div className="section-heading"><strong>Legacy score distribution</strong><span>n = {summary.responses.toLocaleString()}</span></div><div className="bars">{distribution.map((item) => <div className="bar-row" key={item.score}><span><ScorePill score={item.score} /></span><div className="bar-track"><span className={`bar-fill fill-${item.score}`} style={{ width: `${(item.count / max) * 100}%` }} /></div><strong>{item.count.toLocaleString()}</strong></div>)}</div><div className="split-pills">{Object.entries(summary.splits).map(([key, value]) => <span key={key}><b>{key}</b> {value} participants</span>)}</div></section><section className="difficulty-section"><div className="section-heading"><strong>题目难度 / 模糊候选</strong><span>provisional candidates</span></div><div className="difficulty-list">{summary.questions.slice(0, 10).map((item) => <div className="difficulty-row" key={item.id}><span className="mono">{item.id}</span><div className="difficulty-track"><span style={{ width: `${Math.min(100, item.provisional_candidates * 3)}%` }} /></div><strong>{item.provisional_candidates}</strong></div>)}</div></section></div></div>
+  return <div className="detail-view research-view"><WorkflowTrail active="research" /><div className="eyebrow"><span>RESEARCH DASHBOARD</span><span className="eyebrow-line" /><span>LOCKED PARTICIPANT SPLIT</span></div><h2>专家确认，才进入下一轮迭代</h2><p className="view-intro">这里不是自动训练台。它把已经完成仲裁的证据整理成可审计的输入，供团队后续修订 Rubric 与模型。</p><div className="research-action-row"><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /><button className="secondary-button" type="button" onClick={() => void onExport()}>导出专家确认数据</button></div>{exportMessage && <div className="admin-export-message" role="status">{exportMessage}</div>}<div className="metric-grid"><div><span className="box-kicker">参与者</span><strong>{summary.participants}</strong><small>participant-level split</small></div><div><span className="box-kicker">逐题回答</span><strong>{summary.responses.toLocaleString()}</strong><small>20 seed probes</small></div><div><span className="box-kicker">test participants</span><strong>{summary.splits.test}</strong><small>no leakage across questions</small></div><div><span className="box-kicker">待复核候选</span><strong>{summary.questions.reduce((sum, item) => sum + item.provisional_candidates, 0)}</strong><small>item-aware evidence gaps</small></div></div><section className="population-report"><div className="section-heading"><strong>群体描述性统计</strong><span>{summary.risk_rule_version || 'research-band-v1'}</span></div><div className="population-report-metrics"><div><span>整体平均题分</span><strong>{typeof summary.overall_mean_score === 'number' ? summary.overall_mean_score.toFixed(3) : '—'}</strong></div>{riskLabels.map(([key, label]) => <div key={key}><span>{label}</span><strong>{Number(riskCounts[key] ?? 0).toLocaleString()}</strong><small>人</small></div>)}</div><p>{summary.risk_disclaimer || '研究规则分层，仅用于群体描述性统计。'}</p></section><div className="research-evaluation"><div><span>TEST ACCURACY</span><strong>{metric(testMetrics.accuracy, '%')}</strong></div><div><span>MACRO-F1</span><strong>{metric(testMetrics.macro_f1)}</strong></div><div><span>SELECTIVE COVERAGE</span><strong>{metric(selectiveTest.coverage, '%')}</strong></div><div><span>覆盖集 ACC</span><strong>{metric(selectiveTest.accuracy_on_covered, '%')}</strong></div><div><span>CLARIFICATIONS</span><strong>{String(runtime.clarifications ?? 0)}</strong></div><div><span>HUMAN REVIEW</span><strong>{String(runtime.human_review_events ?? 0)}</strong></div></div><div className="research-columns"><section className="chart-section"><div className="section-heading"><strong>Legacy score distribution</strong><span>n = {summary.responses.toLocaleString()}</span></div><div className="bars">{distribution.map((item) => <div className="bar-row" key={item.score}><span><ScorePill score={item.score} /></span><div className="bar-track"><span className={`bar-fill fill-${item.score}`} style={{ width: `${(item.count / max) * 100}%` }} /></div><strong>{item.count.toLocaleString()}</strong></div>)}</div><div className="split-pills">{Object.entries(summary.splits).map(([key, value]) => <span key={key}><b>{key}</b> {value} participants</span>)}</div></section><section className="difficulty-section"><div className="section-heading"><strong>题目难度 / 模糊候选</strong><span>provisional candidates</span></div><div className="difficulty-list">{summary.questions.slice(0, 10).map((item) => <div className="difficulty-row" key={item.id}><span className="mono">{item.id}</span><div className="difficulty-track"><span style={{ width: `${Math.min(100, item.provisional_candidates * 3)}%` }} /></div><strong>{item.provisional_candidates}</strong></div>)}</div></section></div></div>
 }
 
-function ReviewView({ cases, token, onReviewed, onLoadMore, hasMore, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { cases: Array<Record<string, unknown>>; token: string; onReviewed: () => Promise<void>; onLoadMore: () => Promise<void>; hasMore: boolean; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
-  if (!ready) return <div className="detail-view"><div className="eyebrow"><span>EXPERT REVIEW QUEUE</span><span className="eyebrow-line" /><span>PROTECTED</span></div><h2>专家工作台需要口令</h2><p className="view-intro">历史回答和人工仲裁结果不会在参与者空间公开。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /></div>
-  return <ReviewWorkspace cases={cases} token={token} onReviewed={onReviewed} onLoadMore={onLoadMore} hasMore={hasMore} tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} />
+function ReviewView({ cases, token, context, onReviewed, onReturnToSession, onLoadMore, hasMore, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { cases: Array<Record<string, unknown>>; token: string; context: ReviewContext | null; onReviewed: () => Promise<void>; onReturnToSession: (sessionId: string, questionId?: string) => Promise<void>; onLoadMore: () => Promise<void>; hasMore: boolean; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
+  if (!ready) return <div className="detail-view"><WorkflowTrail active="review" /><div className="eyebrow"><span>EXPERT REVIEW QUEUE</span><span className="eyebrow-line" /><span>PROTECTED</span></div><h2>专家工作台需要口令</h2><p className="view-intro">历史回答和人工仲裁结果只对研究人员开放。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /></div>
+  return <div><WorkflowTrail active="review" /><ReviewWorkspace cases={cases} token={token} context={context} onReviewed={onReviewed} onReturnToSession={onReturnToSession} onLoadMore={onLoadMore} hasMore={hasMore} tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /></div>
 }
 
-function ReviewWorkspace({ cases, token, onReviewed, onLoadMore, hasMore, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { cases: Array<Record<string, unknown>>; token: string; onReviewed: () => Promise<void>; onLoadMore: () => Promise<void>; hasMore: boolean; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
+function ReviewWorkspace({ cases, token, context, onReviewed, onReturnToSession, onLoadMore, hasMore, tokenDraft, setTokenDraft, onUnlock, ready, loading }: { cases: Array<Record<string, unknown>>; token: string; context: ReviewContext | null; onReviewed: () => Promise<void>; onReturnToSession: (sessionId: string, questionId?: string) => Promise<void>; onLoadMore: () => Promise<void>; hasMore: boolean; tokenDraft: string; setTokenDraft: (value: string) => void; onUnlock: () => void; ready: boolean; loading: boolean }) {
   const [selectedId, setSelectedId] = useState('')
+  const [contextCase, setContextCase] = useState<Record<string, unknown> | null>(null)
   const [adjudicatedScore, setAdjudicatedScore] = useState('')
   const [evidenceSufficiency, setEvidenceSufficiency] = useState('SUFFICIENT')
   const [note, setNote] = useState('')
   const [message, setMessage] = useState('')
-  const selected = cases.find((item) => String(item.response_id) === selectedId)
+  useEffect(() => {
+    let cancelled = false
+    if (!context) {
+      setContextCase(null)
+      return () => { cancelled = true }
+    }
+    setMessage('正在打开这场评估的复核节点…')
+    const { sessionId, questionId } = context
+    fetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}/review/${encodeURIComponent(questionId)}`, { credentials: 'include' })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('review node unavailable')))
+      .then((payload: Record<string, unknown>) => {
+        if (cancelled) return
+        setContextCase(payload)
+        const nextId = String(payload.response_id ?? '')
+        setSelectedId(nextId)
+        setAdjudicatedScore(payload.adjudicated_score == null ? payload.preliminary_score == null ? '' : String(payload.preliminary_score) : String(payload.adjudicated_score))
+        setEvidenceSufficiency(String(payload.evidence_sufficiency ?? 'UNASSESSED') === 'UNASSESSED' ? 'SUFFICIENT' : String(payload.evidence_sufficiency))
+        setNote('')
+        setMessage('')
+      })
+      .catch(() => { if (!cancelled) setMessage('这处复核节点暂时没有打开。') })
+    return () => { cancelled = true }
+  }, [context])
+
+  const selected = contextCase ?? cases.find((item) => String(item.response_id) === selectedId)
   const submitReview = async () => {
     if (!selectedId) return
     setMessage('保存中…')
     try {
-      const response = await fetch(`/api/review/${encodeURIComponent(selectedId)}`, {
+      const sessionId = String(selected?.session_id ?? '')
+      const questionId = String(selected?.question_id ?? '')
+      const endpoint = sessionId && questionId
+        ? `/api/admin/sessions/${encodeURIComponent(sessionId)}/review/${encodeURIComponent(questionId)}`
+        : `/api/review/${encodeURIComponent(selectedId)}`
+      const response = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Research-Token': token } : {}) },
         body: JSON.stringify({ adjudicated_score: adjudicatedScore === '' ? null : Number(adjudicatedScore), evidence_sufficiency: evidenceSufficiency, note }),
       })
       if (!response.ok) throw new Error('review failed')
+      const payload = await response.json().catch(() => ({})) as { report?: unknown }
       await onReviewed()
+      if (sessionId && payload.report) {
+        await onReturnToSession(sessionId, questionId)
+        return
+      }
       setSelectedId('')
       setAdjudicatedScore('')
       setNote('')
@@ -1018,7 +1084,7 @@ function ReviewWorkspace({ cases, token, onReviewed, onLoadMore, hasMore, tokenD
       setMessage('保存失败，请检查研究口令或服务状态。')
     }
   }
-  return <div className="detail-view"><div className="eyebrow"><span>EXPERT REVIEW QUEUE</span><span className="eyebrow-line" /><span>LEGACY ≠ GOLD</span></div><h2>把不确定性留给专业人员</h2><p className="view-intro">这些回答因语义缺口、历史标签冲突或理由不一致而进入复核队列。</p><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} /><div className="review-table"><div className="table-head"><span>RESPONSE</span><span>ITEM</span><span>LEGACY</span><span>STATUS</span></div>{cases.map((item, index) => <button className={`table-row review-select-row ${String(item.response_id) === selectedId ? 'selected' : ''}`} type="button" key={`${String(item.response_id)}-${index}`} onClick={() => { setSelectedId(String(item.response_id)); setAdjudicatedScore(item.legacy_score == null ? '' : String(item.legacy_score)); setEvidenceSufficiency(String(item.evidence_sufficiency ?? 'UNASSESSED') === 'UNASSESSED' ? 'SUFFICIENT' : String(item.evidence_sufficiency)); setMessage('') }}><span className="response-cell">{String(item.response)}</span><span className="mono">{String(item.question_id)}</span><ScorePill score={Number(item.legacy_score ?? item.preliminary_score) || 0} /><span className="review-status">{String(item.status ?? item.evidence_sufficiency ?? 'OPEN')}</span></button>)}</div>{cases.length === 0 && <div className="empty-table">当前没有开放复核案例。</div>}{hasMore && <button className="ghost-button review-load-more" type="button" onClick={() => void onLoadMore()}>加载更多案例 <span>↓</span></button>}{selected && <div className="review-editor"><div className="box-kicker">当前案例 · {String(selected.question_id)}</div><p className="review-editor-response">{String(selected.response)}</p><div className="review-editor-grid"><label>仲裁分数<select value={adjudicatedScore} onChange={(event) => setAdjudicatedScore(event.target.value)}><option value="">未确定</option><option value="0">0</option><option value="1">1</option><option value="2">2</option></select></label><label>证据充分性<select value={evidenceSufficiency} onChange={(event) => setEvidenceSufficiency(event.target.value)}><option value="SUFFICIENT">SUFFICIENT</option><option value="INSUFFICIENT">INSUFFICIENT</option><option value="EXPERT_DISAGREEMENT">EXPERT_DISAGREEMENT</option></select></label></div><label>专家备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录边界、依据或需要进一步讨论的地方" /></label><button className="secondary-button" type="button" onClick={submitReview}>保存仲裁</button>{message && <span className="review-message">{message}</span>}</div>}</div>
+  return <div className="detail-view"><div className="eyebrow"><span>EXPERT REVIEW QUEUE</span><span className="eyebrow-line" /><span>{context ? 'SESSION CONTEXT' : 'HISTORICAL DATA'}</span></div><div className="review-heading-row"><div><h2>把不确定性留给专业人员</h2><p className="view-intro">{context ? '这处节点从原场报告带来；保存后会自动回到同一场报告。' : '这些回答因语义缺口、历史标签冲突或理由不一致而进入复核队列。'}</p></div>{context && <button className="ghost-button" type="button" onClick={() => void onReturnToSession(context.sessionId, context.questionId)}>回到这场报告</button>}</div><ResearchAccessBar tokenDraft={tokenDraft} setTokenDraft={setTokenDraft} onUnlock={onUnlock} ready={ready} loading={loading} />{context && contextCase ? <div className="review-context-note"><span className="box-kicker">{String(contextCase.question ?? context.questionId)} · {String(contextCase.dimension ?? '')}</span><p>这是 {String(contextCase.session_id)} 中的 {String(contextCase.question_id)}，原话和本题证据会一并保留。</p></div> : <div className="review-table"><div className="table-head"><span>RESPONSE</span><span>ITEM</span><span>LEGACY</span><span>STATUS</span></div>{cases.map((item, index) => <button className={`table-row review-select-row ${String(item.response_id) === selectedId ? 'selected' : ''}`} type="button" key={`${String(item.response_id)}-${index}`} onClick={() => { setContextCase(null); setSelectedId(String(item.response_id)); setAdjudicatedScore(item.legacy_score == null ? '' : String(item.legacy_score)); setEvidenceSufficiency(String(item.evidence_sufficiency ?? 'UNASSESSED') === 'UNASSESSED' ? 'SUFFICIENT' : String(item.evidence_sufficiency)); setMessage('') }}><span className="response-cell">{String(item.response)}</span><span className="mono">{String(item.question_id)}</span><ScorePill score={Number(item.legacy_score ?? item.preliminary_score) || 0} /><span className="review-status">{String(item.status ?? item.evidence_sufficiency ?? 'OPEN')}</span></button>)}</div>}{!context && cases.length === 0 && <div className="empty-table">当前没有开放复核案例。</div>}{!context && hasMore && <button className="ghost-button review-load-more" type="button" onClick={() => void onLoadMore()}>加载更多案例 <span>↓</span></button>}{selected && <div className="review-editor"><div className="box-kicker">当前案例 · {String(selected.question_id)}</div><p className="review-editor-response">{String(selected.response)}</p><div className="review-editor-grid"><label>仲裁分数<select value={adjudicatedScore} onChange={(event) => setAdjudicatedScore(event.target.value)}><option value="">未确定</option><option value="0">0</option><option value="1">1</option><option value="2">2</option></select></label><label>证据充分性<select value={evidenceSufficiency} onChange={(event) => setEvidenceSufficiency(event.target.value)}><option value="SUFFICIENT">SUFFICIENT</option><option value="INSUFFICIENT">INSUFFICIENT</option><option value="EXPERT_DISAGREEMENT">EXPERT_DISAGREEMENT</option></select></label></div><label>专家备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录边界、依据或需要进一步讨论的地方" /></label><button className="secondary-button" type="button" onClick={submitReview}>保存仲裁</button>{message && <span className="review-message">{message}</span>}</div>}</div>
 }
 
 function ReplayView({ submitted, questions }: { submitted: Record<string, ScoreResult>; questions: Question[] }) {

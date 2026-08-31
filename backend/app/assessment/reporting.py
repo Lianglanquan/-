@@ -261,6 +261,7 @@ def build_session_evidence_report(
 
     unresolved = list(state.get("unresolved_gaps") or [])
     review_queue = [{
+        "response_id": f"session:{session.get('id')}:{gap.get('question_id')}",
         "question_id": gap.get("question_id"),
         "priority": gap.get("priority", 0),
         "target_gap": gap.get("target_gap") or gap.get("clarification_question"),

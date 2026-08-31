@@ -131,6 +131,7 @@ class SessionReportingTest(unittest.TestCase):
         self.assertEqual(report['probe_summary']['total'], 1)
         self.assertEqual(report['uncertainty']['conflict_links'], 1)
         self.assertEqual(report['review_queue'][0]['question_id'], 'Q16')
+        self.assertEqual(report['review_queue'][0]['response_id'], 'session:session-1:Q16')
         self.assertEqual(report['versions']['orchestrator'], 'session-orchestrator-v1')
         self.assertEqual(report['versions']['rubric'], ['3.0.0'])
 

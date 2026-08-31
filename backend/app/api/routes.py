@@ -343,7 +343,74 @@ def admin_session_report(session_id: str, admin: dict[str, Any] = Depends(requir
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_report")
-    return build_session_evidence_report(value, RUBRICS)
+    report = build_session_evidence_report(value, RUBRICS)
+    # Every unresolved node receives a stable session-scoped case id when an
+    # administrator opens the report.  This makes the next step actionable
+    # without exposing a separate, disconnected research queue.
+    for gap in report.get("review_queue", []):
+        question_id = str(gap.get("question_id") or "")
+        if question_id:
+            AUDIT.ensure_session_review_case(session_id, question_id)
+    return report
+
+
+@router.get("/admin/sessions/{session_id}/review/{question_id}")
+def admin_session_review_case(session_id: str, question_id: str, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    """Open one unresolved node in the context of its original session."""
+
+    if question_id not in RUBRICS:
+        raise HTTPException(status_code=404, detail="review node not found")
+    try:
+        value = STORE.get(session_id, allow_admin=True)
+    except (KeyError, PermissionError) as exc:
+        raise HTTPException(status_code=404, detail="assessment session not found") from exc
+    if value is None:
+        raise HTTPException(status_code=404, detail="assessment session not found")
+    case = AUDIT.ensure_session_review_case(session_id, question_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="review node not found")
+    case["question"] = RUBRICS[question_id].get("question", "")
+    case["dimension"] = RUBRICS[question_id].get("dimension", "")
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="session_review_case")
+    return case
+
+
+@router.post("/admin/sessions/{session_id}/review/{question_id}")
+def adjudicate_admin_session_review(
+    session_id: str,
+    question_id: str,
+    request: ReviewRequest,
+    admin: dict[str, Any] = Depends(require_admin_access),
+) -> dict[str, Any]:
+    """Save an expert decision and immediately rebuild the same report."""
+
+    if question_id not in RUBRICS:
+        raise HTTPException(status_code=404, detail="review node not found")
+    try:
+        value = STORE.get(session_id, allow_admin=True)
+    except (KeyError, PermissionError) as exc:
+        raise HTTPException(status_code=404, detail="assessment session not found") from exc
+    if value is None:
+        raise HTTPException(status_code=404, detail="assessment session not found")
+    case = AUDIT.ensure_session_review_case(session_id, question_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="review node not found")
+    try:
+        review = AUDIT.record_review(
+            case["response_id"],
+            adjudicated_score=request.adjudicated_score,
+            evidence_sufficiency=request.evidence_sufficiency,
+            note=request.note,
+            reviewer=str(admin.get("email") or admin.get("id") or "administrator"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="review node not found") from exc
+    refreshed = STORE.get(session_id, allow_admin=True)
+    if refreshed is None:
+        raise HTTPException(status_code=404, detail="assessment session not found")
+    report = build_session_evidence_report(refreshed, RUBRICS)
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=refreshed.get("user_id"), session_id=session_id, action="ADJUDICATE", resource="session_review_case")
+    return {"review": review, "session_id": session_id, "question_id": question_id, "report": report}
 
 
 @router.get("/admin/overview")
