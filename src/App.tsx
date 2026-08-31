@@ -6,6 +6,7 @@ import ParticipantFlow from './components/participant/ParticipantFlow'
 import AuthFlow, { AuthUser } from './components/auth/AuthFlow'
 import AdminMembersView, { AdminMember } from './components/admin/AdminMembersView'
 import AdminSessionsView, { AdminSessionDetail, AdminSessionSummary } from './components/admin/AdminSessionsView'
+import AdminOverviewView, { AdminOverview } from './components/admin/AdminOverviewView'
 
 type Criterion = { score: number; description: string; examples: string[] }
 type Question = { id: string; question: string; dimension: string; criteria: Criterion[] }
@@ -128,10 +129,10 @@ const fallbackSummary = {
 const scoreLabels = ['0 · 稳定 / 适应', '1 · 需要关注', '2 · 明显负向']
 
 type Screen = 'welcome' | 'assessment' | 'complete'
-type View = 'assessment' | 'evidence' | 'research' | 'review' | 'replay' | 'members' | 'sessions'
+type View = 'assessment' | 'evidence' | 'research' | 'review' | 'replay' | 'members' | 'sessions' | 'overview'
 type Route = Screen | View
 
-const routeNames: Route[] = ['welcome', 'assessment', 'complete', 'evidence', 'research', 'review', 'replay', 'members', 'sessions']
+const routeNames: Route[] = ['welcome', 'assessment', 'complete', 'evidence', 'research', 'review', 'replay', 'members', 'sessions', 'overview']
 
 function routeFromHash(): Route {
   if (typeof window === 'undefined') return 'welcome'
@@ -199,6 +200,15 @@ function App() {
   const [adminSessionDetail, setAdminSessionDetail] = useState<AdminSessionDetail | null>(null)
   const [adminSessionDetailLoading, setAdminSessionDetailLoading] = useState(false)
   const [adminSessionsMessage, setAdminSessionsMessage] = useState('')
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null)
+  const [adminOverviewLoading, setAdminOverviewLoading] = useState(false)
+  const [adminOverviewSyncing, setAdminOverviewSyncing] = useState(false)
+  const [adminOverviewMessage, setAdminOverviewMessage] = useState('')
+  const adminSessionsInFlight = useRef(false)
+  const adminOverviewInFlight = useRef(false)
+  const adminDetailInFlight = useRef<string | null>(null)
+  const adminDetailRequest = useRef(0)
+  const adminLandingRedirected = useRef(false)
 
   const refreshMembers = useCallback(async () => {
     if (authUser?.role !== 'ADMIN') return
@@ -213,6 +223,8 @@ function App() {
       setMembersLoading(false)
     }
   }, [authUser?.role])
+
+  const hasAdminOverview = Boolean(adminOverview)
 
   useEffect(() => {
     fetch('/api/questions').then((res) => res.ok ? res.json() : Promise.reject()).then(setQuestions).catch(() => undefined)
@@ -263,7 +275,8 @@ function App() {
   }, [authUser?.role, refreshMembers, view])
 
   const refreshAdminSessions = useCallback(async () => {
-    if (authUser?.role !== 'ADMIN') return
+    if (authUser?.role !== 'ADMIN' || adminSessionsInFlight.current) return
+    adminSessionsInFlight.current = true
     setAdminSessionsLoading(true)
     setAdminSessionsMessage('')
     try {
@@ -273,35 +286,70 @@ function App() {
     } catch (error) {
       setAdminSessionsMessage(error instanceof Error ? error.message : '会话列表暂时没有打开。')
     } finally {
+      adminSessionsInFlight.current = false
       setAdminSessionsLoading(false)
     }
   }, [authUser?.role])
 
+  const refreshAdminOverview = useCallback(async (background = false) => {
+    if (authUser?.role !== 'ADMIN' || adminOverviewInFlight.current) return
+    adminOverviewInFlight.current = true
+    if (background) setAdminOverviewSyncing(true)
+    else setAdminOverviewLoading(true)
+    setAdminOverviewMessage('')
+    try {
+      const response = await fetch('/api/admin/overview', { credentials: 'include' })
+      if (!response.ok) throw new Error('总览暂时没有打开。')
+      setAdminOverview(await response.json() as AdminOverview)
+    } catch (error) {
+      setAdminOverviewMessage(error instanceof Error ? error.message : '总览暂时没有打开。')
+    } finally {
+      adminOverviewInFlight.current = false
+      if (background) setAdminOverviewSyncing(false)
+      else setAdminOverviewLoading(false)
+    }
+  }, [authUser?.role])
+
   const openAdminSession = useCallback(async (id: string) => {
-    if (authUser?.role !== 'ADMIN') return
+    if (authUser?.role !== 'ADMIN' || adminDetailInFlight.current === id) return
+    adminDetailInFlight.current = id
+    const requestId = ++adminDetailRequest.current
     setAdminSessionDetailLoading(true)
     setAdminSessionsMessage('')
     try {
-      const response = await fetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { credentials: 'include' })
-      if (!response.ok) throw new Error('这场会话暂时没有打开。')
-      setAdminSessionDetail(await response.json() as AdminSessionDetail)
+      const [detailResponse, reportResponse] = await Promise.all([
+        fetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { credentials: 'include' }),
+        fetch(`/api/admin/sessions/${encodeURIComponent(id)}/report`, { credentials: 'include' }),
+      ])
+      if (!detailResponse.ok || !reportResponse.ok) throw new Error('这场会话暂时没有打开。')
+      const detail = await detailResponse.json() as AdminSessionDetail
+      detail.evidence_report = await reportResponse.json()
+      if (requestId === adminDetailRequest.current) setAdminSessionDetail(detail)
     } catch (error) {
       setAdminSessionsMessage(error instanceof Error ? error.message : '这场会话暂时没有打开。')
-      setAdminSessionDetail(null)
     } finally {
-      setAdminSessionDetailLoading(false)
+      if (adminDetailInFlight.current === id) adminDetailInFlight.current = null
+      if (requestId === adminDetailRequest.current) setAdminSessionDetailLoading(false)
     }
   }, [authUser?.role])
 
   useEffect(() => {
-    if (authUser?.role !== 'ADMIN' || view !== 'sessions') return
-    void refreshAdminSessions()
-    const timer = window.setInterval(() => {
+    if (authUser?.role !== 'ADMIN' || !['sessions', 'overview'].includes(view)) return
+    const sync = () => {
+      if (document.visibilityState !== 'visible') return
+      if (view === 'overview') void refreshAdminOverview(hasAdminOverview)
       void refreshAdminSessions()
       if (adminSessionDetail?.id) void openAdminSession(adminSessionDetail.id)
-    }, 15000)
-    return () => window.clearInterval(timer)
-  }, [adminSessionDetail?.id, authUser?.role, openAdminSession, refreshAdminSessions, view])
+    }
+    sync()
+    const timer = window.setInterval(sync, 30000)
+    const onVisibility = () => { if (document.visibilityState === 'visible') sync() }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [adminSessionDetail?.id, authUser?.role, hasAdminOverview, openAdminSession, refreshAdminOverview, refreshAdminSessions, view])
 
   const refreshReviewCases = async () => {
     if (authUser?.role !== 'ADMIN') return
@@ -423,13 +471,14 @@ function App() {
   }
 
   useEffect(() => {
-    if (authUser?.role === 'ADMIN' && screen === 'welcome') {
-      if (typeof window !== 'undefined' && window.location.hash !== '#sessions') window.history.replaceState(null, '', '#sessions')
+    if (authUser?.role === 'ADMIN' && !adminLandingRedirected.current && !sessionId) {
+      adminLandingRedirected.current = true
+      if (typeof window !== 'undefined' && window.location.hash !== '#overview') window.history.replaceState(null, '', '#overview')
       setScreen('assessment')
-      setView('sessions')
+      setView('overview')
       return
     }
-    if (authUser?.role === 'ADMIN' || !['members', 'research', 'review', 'sessions'].includes(view)) return
+    if (authUser?.role === 'ADMIN' || !['members', 'research', 'review', 'sessions', 'overview'].includes(view)) return
     if (typeof window !== 'undefined' && window.location.hash !== '#assessment') window.location.hash = 'assessment'
     setScreen('assessment')
     setView('assessment')
@@ -546,6 +595,7 @@ function App() {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined)
     setAuthUser(null)
     setSessionId(null)
+    adminLandingRedirected.current = false
     navigate('welcome')
   }
 
@@ -563,9 +613,9 @@ function App() {
       <OnekoCat enabled={catPlayfulSurface && (screen === 'welcome' || screen === 'complete' || entryTransition || (screen === 'assessment' && view === 'assessment'))} transitioning={entryTransition} region={screen === 'assessment' && view === 'assessment' ? '[data-oneko-region]' : undefined} />
       <PlayfulInteractions enabled={catPlayfulSurface} />
       <header className="topbar">
-        <button className="brand brand-button" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '回到开始'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'sessions' : 'welcome')}><span className="brand-mark">✳</span><span>听见自己</span><small>留一点时间给自己</small></button>
+        <button className="brand brand-button" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '回到开始'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'overview' : 'welcome')}><span className="brand-mark">✳</span><span>听见自己</span><small>留一点时间给自己</small></button>
         <div className="topbar-actions">
-          {screen === 'assessment' && <button className="header-quiet" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '暂离'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'sessions' : 'welcome')}>{authUser.role === 'ADMIN' ? '控制台' : '暂离'}</button>}
+          {screen === 'assessment' && <button className="header-quiet" type="button" data-cursor="-text" data-cursor-text={authUser.role === 'ADMIN' ? '回到控制台' : '暂离'} onClick={() => navigate(authUser.role === 'ADMIN' ? 'overview' : 'welcome')}>{authUser.role === 'ADMIN' ? '控制台' : '暂离'}</button>}
           <button className="header-quiet auth-user-button" type="button" onClick={() => void logout()} title={authUser.email}>{authUser.role === 'ADMIN' ? '管理员 · 退出' : '退出'}</button>
           <div className="top-status"><span className="status-dot" /> 只留在这里 <span className="divider" /> <span className="ai-status">{providerStatus?.mode === 'llm' ? `AI 已连接 · ${providerStatus.model}${providerStatus.session_intelligence === 'llm-advisory' ? ' · 会话编排已启用' : ''}` : 'AI 评分准备中'}</span><span className="divider" /> <span className="mono">PRIVATE SESSION</span></div>
         </div>
@@ -581,16 +631,17 @@ function App() {
               {([['assessment', '继续']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}
             </div>
             <div className="research-tabs">
-              {authUser.role === 'ADMIN' && <><span className="research-label">研究空间</span>{([['research', '研究台'], ['review', '专家工作'], ['sessions', '评估会话'], ['members', '成员与权限']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
+              {authUser.role === 'ADMIN' && <><span className="research-label">管理员空间</span>{([['overview', '评估总览'], ['research', '研究台'], ['review', '专家工作'], ['sessions', '评估会话'], ['members', '成员与权限']] as Array<[View, string]>).map(([id, label]) => <button key={id} className={view === id ? 'selected' : ''} onClick={() => openView(id)}>{label}</button>)}</>}
             </div>
           </nav>
           {view === 'assessment' && <ParticipantFlow initialStage="question" suppressProbe={completionHandoff} onComplete={nextQuestion} totalQuestions={questions.length} question={question} selected={selected} response={response} setResponse={setResponse} result={currentResult} nextAction={nextAction} clarification={clarification} setClarification={setClarification} runScore={runScore} loading={loading} errorMessage={errorMessage} onNext={nextQuestion} />}
           {view === 'evidence' && <EvidenceView question={question} result={currentResult} response={response} globalEvidence={globalEvidence} />}
+          {view === 'overview' && authUser.role === 'ADMIN' && <AdminOverviewView overview={adminOverview} loading={adminOverviewLoading} syncing={adminOverviewSyncing} message={adminOverviewMessage} onRefresh={() => refreshAdminOverview(false)} onOpenSession={(id) => { void openAdminSession(id); navigate('sessions') }} onOpenReview={() => navigate('review')} onStartTest={() => { void startAssessment() }} onMembers={() => navigate('members')} />}
           {view === 'research' && <ResearchView summary={summary} distribution={scoreDistribution} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'review' && <ReviewView cases={cases} token={researchToken} onReviewed={refreshReviewCases} onLoadMore={loadMoreReviewCases} hasMore={reviewHasMore} tokenDraft={researchTokenDraft} setTokenDraft={setResearchTokenDraft} onUnlock={unlockResearch} ready={researchReady} loading={researchLoading} />}
           {view === 'replay' && <ReplayView submitted={submitted} questions={questions} />}
           {view === 'members' && authUser.role === 'ADMIN' && <AdminMembersView members={members} currentUserId={authUser.id} loading={membersLoading} message={membersMessage} onInvite={inviteMember} onRoleChange={changeMemberRole} onActiveChange={changeMemberActive} onRefresh={refreshMembers} />}
-          {view === 'sessions' && authUser.role === 'ADMIN' && <AdminSessionsView sessions={adminSessions} selected={adminSessionDetail} loading={adminSessionsLoading} detailLoading={adminSessionDetailLoading} message={adminSessionsMessage} onRefresh={refreshAdminSessions} onSelect={openAdminSession} />}
+          {view === 'sessions' && authUser.role === 'ADMIN' && <AdminSessionsView sessions={adminSessions} selected={adminSessionDetail} loading={adminSessionsLoading} detailLoading={adminSessionDetailLoading} message={adminSessionsMessage} onRefresh={refreshAdminSessions} onSelect={openAdminSession} onReview={() => navigate('review')} />}
         </section>
       </div>}
     </main>

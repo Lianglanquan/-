@@ -119,6 +119,47 @@ class AdminApiTest(unittest.TestCase):
         self.assertNotIn('latest_admin_report', participant_detail.json().get('metadata', {}))
         self.assertTrue(any(row['action'] == 'READ' and row['session_id'] == session_id for row in admin_audit))
 
+    def test_admin_overview_and_evidence_report_expose_review_priorities(self) -> None:
+        self._register('owner@example.com')
+        participant = self._register('person@example.com')
+        self._login('person@example.com')
+        started = self.client.post('/api/assessment/start')
+        session_id = started.json()['id']
+        submitted = self.client.post(
+            f'/api/assessment/{session_id}/responses',
+            json={'question_id': 'Q16', 'response': '责任'},
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        self.assertEqual(self.client.get('/api/admin/overview').status_code, 403)
+        self.assertEqual(self.client.get(f'/api/admin/sessions/{session_id}/report').status_code, 403)
+
+        # Make this seeded session an explicit expert-work example without
+        # changing its item score or event history.
+        self.audit.set_session_status(session_id, 'AWAITING_REVIEW')
+        self.client.post('/api/auth/logout')
+        self._login('owner@example.com')
+
+        overview_response = self.client.get('/api/admin/overview')
+        self.assertEqual(overview_response.status_code, 200, overview_response.text)
+        overview = overview_response.json()
+        self.assertEqual(overview['counts']['sessions'], 1)
+        self.assertEqual(overview['counts']['awaiting_review'], 1)
+        self.assertEqual(overview['recent_sessions'][0]['email'], 'person@example.com')
+        self.assertEqual(overview['recent_sessions'][0]['user_id'], participant['id'])
+        self.assertTrue(any(item['session_id'] == session_id and item['question_id'] == 'Q16' for item in overview['review_priorities']))
+
+        report_response = self.client.get(f'/api/admin/sessions/{session_id}/report')
+        self.assertEqual(report_response.status_code, 200, report_response.text)
+        report = report_response.json()
+        self.assertEqual(report['session_id'], session_id)
+        self.assertEqual(len(report['item_matrix']), 20)
+        self.assertIn('constructs', report)
+        self.assertIn('timeline', report)
+        self.assertIn('review_queue', report)
+        self.assertEqual(next(row for row in report['item_matrix'] if row['question_id'] == 'Q16')['score']['preliminary'], submitted.json()['score']['preliminary_score'])
+        audit = self.client.get('/api/admin/audit').json()
+        self.assertTrue(any(row['resource'] == 'assessment_report' and row['session_id'] == session_id for row in audit))
+
 
 if __name__ == '__main__':
     unittest.main()

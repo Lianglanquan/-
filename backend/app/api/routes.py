@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from pydantic import BaseModel, Field, field_validator
 
 from backend.app.assessment.service import AssessmentStore
-from backend.app.assessment.reporting import build_population_summary
+from backend.app.assessment.reporting import build_population_summary, build_session_evidence_report
 from backend.app.audit.store import AuditStore
 from backend.app.auth.mailer import MailDeliveryError, ResendMailer
 from backend.app.auth.service import AuthError, AuthService
@@ -330,6 +330,71 @@ def admin_session(session_id: str, admin: dict[str, Any] = Depends(require_admin
         raise HTTPException(status_code=404, detail="assessment session not found")
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_session")
     return value
+
+
+@router.get("/admin/sessions/{session_id}/report")
+def admin_session_report(session_id: str, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    try:
+        value = STORE.get(session_id, allow_admin=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="assessment session not found") from exc
+    if value is None:
+        raise HTTPException(status_code=404, detail="assessment session not found")
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_report")
+    return build_session_evidence_report(value, RUBRICS)
+
+
+@router.get("/admin/overview")
+def admin_overview(admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
+    AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=None, session_id=None, action="LIST", resource="overview")
+    sessions = AUDIT.list_all_sessions(limit=200, offset=0)
+    review_priorities: list[dict[str, Any]] = []
+    safety_sessions: list[dict[str, Any]] = []
+    awaiting_review = 0
+    completed = 0
+    for session in sessions:
+        status = str(session.get("status") or "")
+        if status == "AWAITING_REVIEW":
+            awaiting_review += 1
+        if status == "COMPLETED":
+            completed += 1
+        metadata = session.get("metadata") or {}
+        evidence = metadata.get("latest_global_evidence") or {}
+        report = metadata.get("latest_admin_report") or {}
+        if report.get("safety_triggered") or status == "SAFETY_REVIEW":
+            safety_sessions.append({
+                "session_id": session["id"],
+                "email": session.get("email"),
+                "updated_at": session.get("updated_at"),
+                "status": status,
+            })
+        for gap in evidence.get("unresolved_gaps") or []:
+            review_priorities.append({
+                "session_id": session["id"],
+                "email": session.get("email"),
+                "question_id": gap.get("question_id"),
+                "priority": gap.get("priority", 0),
+                "status": gap.get("status", "OPEN"),
+                "target_gap": gap.get("target_gap") or gap.get("clarification_question"),
+                "support_count": gap.get("support_count", 0),
+                "conflict_count": gap.get("conflict_count", 0),
+                "updated_at": session.get("updated_at"),
+            })
+    review_priorities.sort(key=lambda row: (float(row.get("priority") or 0), str(row.get("updated_at") or "")), reverse=True)
+    return {
+        "updated_at": max((session.get("updated_at") or "" for session in sessions), default=None),
+        "counts": {
+            "sessions": len(sessions),
+            "completed": completed,
+            "awaiting_review": awaiting_review,
+            "safety_sessions": len(safety_sessions),
+            "open_nodes": len(review_priorities),
+        },
+        "recent_sessions": sessions[:12],
+        "review_priorities": review_priorities[:24],
+        "safety_sessions": safety_sessions[:12],
+        "disclaimer": "这里展示的是研究评估证据与复核队列，不是临床诊断或自动干预结论。",
+    }
 
 
 def _records() -> list[dict[str, Any]]:

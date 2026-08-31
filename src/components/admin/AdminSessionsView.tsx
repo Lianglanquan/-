@@ -58,6 +58,18 @@ export type AdminSessionDetail = AdminSessionSummary & {
     intervention_recommendation?: string
     disclaimer?: string
   }
+  evidence_report?: {
+    session_id?: string
+    overview?: Record<string, unknown>
+    constructs?: Array<Record<string, unknown>>
+    item_matrix?: Array<Record<string, unknown>>
+    timeline?: Array<Record<string, unknown>>
+    probe_summary?: Record<string, unknown>
+    uncertainty?: Record<string, unknown>
+    ai_decisions?: Array<Record<string, unknown>>
+    review_queue?: Array<Record<string, unknown>>
+    versions?: Record<string, unknown>
+  }
 }
 
 type AdminSessionsViewProps = {
@@ -68,6 +80,7 @@ type AdminSessionsViewProps = {
   message: string
   onRefresh: () => Promise<void>
   onSelect: (sessionId: string) => Promise<void>
+  onReview: () => void
 }
 
 function formatDate(value?: string | null) {
@@ -93,19 +106,23 @@ function riskLabel(value?: string) {
   return labels[value || ''] || value || '未分层'
 }
 
-export default function AdminSessionsView({ sessions, selected, loading, detailLoading, message, onRefresh, onSelect }: AdminSessionsViewProps) {
+export default function AdminSessionsView({ sessions, selected, loading, detailLoading, message, onRefresh, onSelect, onReview }: AdminSessionsViewProps) {
   const selectedId = selected?.id
-  const selectedEvidence = selected?.global_evidence
-  const report = selected?.admin_report
-  const constructs = selectedEvidence?.constructs ?? []
-  const unresolved = selectedEvidence?.unresolved_gaps ?? []
-  const answered = useMemo(() => selected?.items.filter((item) => item.event_type === 'INITIAL').length ?? 0, [selected])
+  const report = selected?.evidence_report
+  const overview = report?.overview ?? {}
+  const constructs = report?.constructs ?? selected?.global_evidence?.constructs ?? []
+  const matrix = report?.item_matrix ?? []
+  const timeline = report?.timeline ?? []
+  const unresolved = report?.review_queue ?? selected?.global_evidence?.unresolved_gaps ?? []
+  const answered = useMemo(() => Number(overview.seed_answered ?? selected?.global_evidence?.seed_answered ?? selected?.items.filter((item) => item.event_type === 'INITIAL').length ?? 0), [overview.seed_answered, selected])
+  const asNumber = (value: unknown, fallback = 0) => typeof value === 'number' ? value : Number(value ?? fallback)
+  const asText = (value: unknown, fallback = '—') => typeof value === 'string' && value ? value : fallback
 
   return <div className="detail-view admin-sessions-view">
-    <div className="eyebrow"><span>SESSION CONTROL ROOM</span><span className="eyebrow-line" /><span>ADMIN ONLY</span></div>
-    <h2>每一场评估，都能被看见</h2>
-    <p className="view-intro">按会话查看参与者原话、逐题证据、AI 的会话判断与最终编排。这里的阅读动作会留下审计记录。</p>
-    <div className="sessions-toolbar"><span className="box-kicker">会话 {sessions.length} · 每 15 秒自动更新</span><button className="ghost-button" type="button" onClick={() => void onRefresh()} disabled={loading}>{loading ? '读取中…' : '刷新列表 ↻'}</button></div>
+    <div className="eyebrow"><span>ASSESSMENT SESSIONS</span><span className="eyebrow-line" /><span>ADMIN ONLY</span></div>
+    <h2>把一场评估读成一条证据路径</h2>
+    <p className="view-intro">先看整场形成了什么，再回到具体原话。跨题关系只帮助安排复核，不会改写任何一道题的评分。</p>
+    <div className="sessions-toolbar"><span className="box-kicker">会话 {sessions.length} · 默认每 30 秒同步</span><span className="sessions-sync-note">{loading ? '正在同步…' : '上一份内容仍保留'}</span><button className="ghost-button" type="button" onClick={() => void onRefresh()} disabled={loading}>{loading ? '同步中…' : '同步列表 ↻'}</button></div>
     {message && <div className="members-message" role="status">{message}</div>}
     <div className="sessions-layout">
       <div className="sessions-list" aria-label="评估会话列表">
@@ -120,17 +137,18 @@ export default function AdminSessionsView({ sessions, selected, loading, detailL
         {!sessions.length && <div className="members-empty">还没有评估会话。</div>}
       </div>
       <section className="session-detail" aria-live="polite">
-        {detailLoading && <div className="session-detail-empty">正在打开这场会话…</div>}
-        {!detailLoading && !selected && <div className="session-detail-empty"><span className="empty-glyph">⌁</span><strong>从左侧选择一场会话</strong><span>这里会显示完整回答、AI 分析和证据链。</span></div>}
-        {!detailLoading && selected && <>
+        {detailLoading && selected && <div className="session-detail-syncing">正在同步这场会话，上一份内容仍保留。</div>}
+        {!selected && <div className="session-detail-empty"><span className="empty-glyph">⌁</span><strong>从左侧选择一场会话</strong><span>这里会显示完整回答、证据地图和评估路径。</span></div>}
+        {selected && <>
           <div className="session-detail-heading"><div><span className="box-kicker">{selected.email || '未关联邮箱'}</span><h3>{statusLabel(selected.status)}</h3></div><span className="session-detail-date">更新于 {formatDate(selected.updated_at)}</span></div>
-          <div className="session-detail-stats"><div><strong>{answered}</strong><span>Seed 回答</span></div><div><strong>{selectedEvidence?.probe_count ?? 0}</strong><span>探针事件</span></div><div><strong>{unresolved.length}</strong><span>未决节点</span></div><div><strong>{selected.decision_history?.length ?? 0}</strong><span>AI 决策</span></div></div>
-          {report && <div className="session-admin-report"><div className="session-report-heading"><span className="box-kicker">管理员摘要 · {report.disclaimer || '研究规则'}</span><strong>{riskLabel(report.risk_level)}</strong></div><div className="session-report-metrics"><div><span>总分</span><strong>{report.total_score == null ? '—' : `${report.total_score} / ${report.max_score ?? 40}`}</strong></div><div><span>平均题分</span><strong>{report.mean_score == null ? '—' : report.mean_score}</strong></div><div><span>0 / 1 / 2</span><strong>{Object.entries(report.score_counts ?? {}).map(([score, count]) => `${score}:${count}`).join('  ') || '—'}</strong></div></div><p className="session-report-recommendation"><span>干预建议（需人工确认）</span>{report.intervention_recommendation || '等待更多证据。'}</p></div>}
-          {selected.session_intelligence?.session_summary && <div className="session-ai-summary"><div className="section-heading"><strong>会话级 AI 摘要</strong><span>{selected.session_intelligence.model || 'advisory'}</span></div><p>{selected.session_intelligence.session_summary}</p>{selected.session_intelligence.planning_notes?.[0] && <small>{selected.session_intelligence.planning_notes[0]}</small>}</div>}
-          {selected.participant_handoff?.message && <div className="session-handoff-note"><span className="box-kicker">参与者交付</span><p>{selected.participant_handoff.message}</p></div>}
-          <div className="session-detail-section"><div className="section-heading"><strong>构念证据</strong><span>{selectedEvidence?.seed_answered ?? 0} / {selectedEvidence?.seed_total ?? 20} seed</span></div><div className="session-construct-list">{constructs.map((construct, index) => <div className="session-construct-row" key={String(construct.id ?? index)}><div><strong>{String(construct.label ?? construct.id ?? '未分类')}</strong><span>{String(construct.status ?? 'UNANSWERED')}</span></div><small>{String(construct.answered ?? 0)} 题 · 证据 {Math.round(Number(construct.evidence_density ?? 0) * 100)}%</small><i><span style={{ width: `${Math.min(100, Number(construct.evidence_density ?? 0) * 100)}%` }} /></i></div>)}</div></div>
-          {unresolved.length > 0 && <div className="session-detail-section"><div className="section-heading"><strong>未决节点</strong><span>需要进一步理解或复核</span></div><div className="session-open-list">{unresolved.map((item, index) => <div key={`${String(item.question_id)}-${index}`}><strong>{String(item.question_id || '一处回答')}</strong><span>{String(item.status || item.probe_type || 'OPEN')}</span><p>{String(item.target_gap || item.clarification_question || '这部分证据还没有完全打开。')}</p></div>)}</div></div>}
-          <div className="session-detail-section"><div className="section-heading"><strong>原话与评分事件</strong><span>{selected.items.length} events</span></div><div className="session-event-list">{selected.items.map((item, index) => <article className="session-event" key={item.event_id || `${item.question_id}-${index}`}><div className="session-event-meta"><span className="mono">{item.question_id}</span><span>{item.event_type === 'INITIAL' ? 'Seed' : item.probe_type || item.event_type || 'Probe'}</span><time>{formatDate(item.created_at)}</time></div><p>{item.response || '（空白）'}</p><div className="session-event-score"><span>{scoreLabel(item.score?.score_status)}</span><span>{item.score?.evidence_sufficiency || 'UNASSESSED'}</span><span>{typeof item.score?.confidence === 'number' ? `${Math.round(item.score.confidence * 100)}% 把握` : '—'}</span></div></article>)}</div></div>
+          <div className="session-detail-stats"><div><strong>{answered}</strong><span>Seed 回答</span></div><div><strong>{asNumber(report?.probe_summary?.total, selected.global_evidence?.probe_count ?? 0)}</strong><span>求证事件</span></div><div><strong>{asNumber(report?.uncertainty?.open_nodes, unresolved.length)}</strong><span>未决节点</span></div><div><strong>{asNumber(report?.uncertainty?.conflict_links)}</strong><span>跨题冲突</span></div></div>
+          <div className="session-reading-note"><span className="box-kicker">AI 会话摘要</span><p>{asText(overview.session_summary, selected.session_intelligence?.session_summary || '这场评估还在形成中。先从原话和证据充分性开始阅读。')}</p><small>{asText(report?.versions?.session_model, selected.session_intelligence?.model || 'session-level advisory')}</small></div>
+          <div className="session-report-overview"><div><span className="box-kicker">研究分层 · 仅用于分流</span><strong>{riskLabel(asText(overview.research_band, 'INCOMPLETE'))}</strong></div><p>{asText(overview.support_recommendation, '先看证据质量和未决节点，再决定是否需要专家复核。')}</p></div>
+          <div className="session-report-section"><div className="section-heading"><div><strong>证据地图</strong><small>表现方向与证据质量分开阅读</small></div><span>{answered} / {asNumber(overview.seed_total, 20)} 题</span></div><div className="session-construct-list">{constructs.map((construct, index) => <div className="session-construct-row" key={String(construct.id ?? index)}><div><strong>{String(construct.label ?? construct.id ?? '未分类')}</strong><span>{String(construct.evidence_quality ?? construct.status ?? 'UNASSESSED')}</span></div><small>{asNumber(construct.answered)} 题 · {String(construct.pattern_level ?? 'UNASSESSED')}</small><i><span style={{ width: `${Math.min(100, asNumber(construct.evidence_density) * 100)}%` }} /></i></div>)}</div></div>
+          <div className="session-report-section"><div className="section-heading"><div><strong>20题证据矩阵</strong><small>跨题关系不会改变这里的单题分数</small></div><span>{matrix.length} items</span></div><div className="session-matrix">{matrix.map((item, index) => { const score = item.score as Record<string, unknown> | undefined; const evidence = item.evidence as Record<string, unknown> | undefined; const relationships = item.relationships as Record<string, unknown> | undefined; return <article key={`${String(item.question_id)}-${index}`}><div className="session-matrix-top"><span className="mono">{String(item.question_id)}</span><strong>{asText(item.dimension, '未分类')}</strong><span>{scoreLabel(asText(score?.status))}</span></div><p>{asText(item.latest_response, '尚未回答')}</p><div><span>有效分 {score?.effective == null ? '—' : String(score.effective)}</span><span>证据 {String(evidence?.sufficiency ?? 'UNASSESSED')}</span><span>把握 {typeof evidence?.confidence === 'number' ? `${Math.round(Number(evidence.confidence) * 100)}%` : '—'}</span><span>支持/冲突 {asNumber(relationships?.support_count)}/{asNumber(relationships?.conflict_count)}</span></div></article> })}</div></div>
+          {unresolved.length > 0 && <div className="session-report-section"><div className="section-heading"><div><strong>未决节点</strong><small>优先处理最影响整体理解的地方</small></div><button className="session-review-link" type="button" onClick={onReview}>进入专家工作台 →</button></div><div className="session-open-list">{unresolved.map((item, index) => <div key={`${String(item.question_id)}-${index}`}><strong>{String(item.question_id || '一处回答')}</strong><span>{String(item.status || 'OPEN')} · 优先级 {Math.round(asNumber(item.priority) * 100)}</span><p>{String(item.target_gap || '这部分证据还没有完全打开。')}</p></div>)}</div></div>}
+          <div className="session-report-section"><div className="section-heading"><div><strong>评估路径</strong><small>AI 如何发现缺口、求证并交接</small></div><span>{timeline.length} steps</span></div><div className="session-timeline">{timeline.map((event, index) => <div key={`${String(event.id)}-${index}`}><span className={`timeline-dot timeline-${String(event.kind || '').toLowerCase()}`} /><div><small>{formatDate(String(event.created_at || ''))} · {String(event.kind || 'EVENT')}</small><strong>{String(event.title || '记录了一步判断')}</strong><p>{String(event.description || '')}</p></div></div>)}</div></div>
+          <div className="session-report-section"><div className="section-heading"><div><strong>原话回放</strong><small>完整证据链仍可逐条查看</small></div><span>{selected.items.length} events</span></div><div className="session-event-list">{selected.items.map((item, index) => <article className="session-event" key={item.event_id || `${item.question_id}-${index}`}><div className="session-event-meta"><span className="mono">{item.question_id}</span><span>{item.event_type === 'INITIAL' ? 'Seed' : item.probe_type || item.event_type || 'Probe'}</span><time>{formatDate(item.created_at)}</time></div><p>{item.response || '（空白）'}</p><div className="session-event-score"><span>{scoreLabel(item.score?.score_status)}</span><span>{item.score?.evidence_sufficiency || 'UNASSESSED'}</span><span>{typeof item.score?.confidence === 'number' ? `${Math.round(item.score.confidence * 100)}% 把握` : '—'}</span></div></article>)}</div></div>
         </>}
       </section>
     </div>
