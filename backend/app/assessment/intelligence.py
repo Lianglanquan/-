@@ -394,7 +394,7 @@ def apply_ai_planning(state: dict[str, Any], advice: dict[str, Any]) -> dict[str
                 base_action["question"] = recommendation["question"]
             if recommendation.get("rationale"):
                 base_action["rationale"] = f"{base_action.get('rationale', '')} AI 会话建议：{recommendation['rationale']}"
-            if matching_probe and matching_probe.get("cat_probe") and base_action.get("type") in {"CLARIFY_NOW", "CONFIRM_NOW"}:
+            if matching_probe and matching_probe.get("cat_probe") and base_action.get("type") in {"CLARIFY_NOW", "CONFIRM_NOW", "DEFER_CLARIFICATION"}:
                 base_action["interaction"] = matching_probe["cat_probe"]
 
     # Re-sort unresolved gaps after bounded AI priority adjustments, but keep

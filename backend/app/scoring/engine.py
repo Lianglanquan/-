@@ -7,12 +7,13 @@ classifier and never turns a score into a safety conclusion.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from backend.app.scoring.catalog import LEGACY_CATALOG_VERSION, load_catalog
 
 
 class Evidence(BaseModel):
@@ -83,10 +84,10 @@ GAP_PROBES: dict[str, tuple[str, str]] = {
     "Q13": ("你与消极想法之间的关系还不明确", "这种做法会让你重新掌握注意力，还是仍被想法牵着走？"),
     "Q14": ("你把对方冷淡归因于什么还不明确", "你更倾向认为是对方当下的状态、关系问题，还是自己的问题？"),
     "Q15": ("失去掌控时的行动倾向还不明确", "这种想法之后，你通常会处理能处理的部分，还是不再行动？"),
-    "Q16": ("牵挂的正负方向还不明确", "牵挂对你更像支持、负担，还是两者都有？"),
-    "Q17": ("未来画面的内容和方向还不明确", "你想到的画面里，自己大概在哪里、在做什么？"),
-    "Q18": ("危险中的求生行动或计划还不明确", "当时你会先做什么来保护自己或身边的人？"),
-    "Q19": ("面对死亡威胁时的主导感受还不明确", "那一刻最先出现的是害怕、不舍、空白，还是其他感受？"),
+    "Q16": ("未来画面的内容和方向还不明确", "你想到的画面里，自己大概在哪里、在做什么？"),
+    "Q17": ("危险中的求生行动或计划还不明确", "当时你会先做什么来保护自己或身边的人？"),
+    "Q18": ("面对死亡威胁时的主导感受还不明确", "那一刻最先出现的是害怕、不舍、空白，还是其他感受？"),
+    "Q19": ("0 到 10 的影响分数还不明确", "如果只选一个 0 到 10 的数字，你会选几分？"),
     "Q20": ("0 到 10 的影响分数还不明确", "如果只选一个 0 到 10 的数字，你会选几分？"),
 }
 
@@ -121,20 +122,23 @@ def q20_numeric_values(response: str) -> list[int]:
     return []
 
 
+def load_active_rubrics(root: Path) -> dict[str, dict[str, Any]]:
+    return load_catalog(root).rubrics
+
+
 def load_rubrics(root: Path) -> dict[str, dict[str, Any]]:
-    result = {}
-    for path in sorted((root / "rubrics").glob("Q*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            result[data["id"]] = data
-        except (OSError, json.JSONDecodeError, KeyError):
-            continue
-    return result
+    """Compatibility loader for the immutable pre-removal catalog."""
+
+    return load_catalog(root, LEGACY_CATALOG_VERSION).rubrics
 
 
-def _score(question_id: str, response: str) -> int:
+def _is_numeric_impact_item(question_id: str, rubric: dict[str, Any]) -> bool:
+    return question_id == "Q20" or (question_id == "Q19" and rubric.get("source_id") == "Q20")
+
+
+def _score(question_id: str, response: str, rubric: dict[str, Any] | None = None) -> int:
     text = response.strip()
-    if question_id == "Q20":
+    if _is_numeric_impact_item(question_id, rubric or {}):
         values = q20_numeric_values(text)
         if len(values) == 1:
             value = values[0]
@@ -162,7 +166,7 @@ def evidence_gap(question_id: str, response: str, rubric: dict[str, Any] | None 
         question_id,
         ("回答的具体方向还不明确", "你能用一个具体感受、想法或做法补充说明吗？"),
     )
-    if question_id == "Q20":
+    if _is_numeric_impact_item(question_id, rubric or {}):
         matches = q20_numeric_values(text)
         if len(matches) != 1 or not 0 <= matches[0] <= 10:
             return "INVALID_NUMERIC_RESPONSE", target_gap, question
@@ -178,7 +182,7 @@ def evidence_gap(question_id: str, response: str, rubric: dict[str, Any] | None 
 
 def score_response(question_id: str, response: str, rubrics: dict[str, dict[str, Any]]) -> ScoreResult:
     rubric = rubrics.get(question_id, {"version": "unknown"})
-    score = _score(question_id, response)
+    score = _score(question_id, response, rubric)
     gap = evidence_gap(question_id, response, rubric)
     spans: list[Evidence] = []
     for token in HIGH + MID + AMBIGUOUS:

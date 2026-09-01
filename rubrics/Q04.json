@@ -1,10 +1,10 @@
 {
   "id": "Q04",
   "source_id": "Q4",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "status": "source-extracted",
   "question": "把内心最真实、最不愿示人的部分展现给某个人之后，______。",
-  "dimension": "人际负性体验-人际归属感",
+  "dimension": "情绪状态与人际联结",
   "criteria": [
     {
       "score": 0,
@@ -40,5 +40,7 @@
   "provenance": {
     "source": "正式调研题项及评分细则(1).docx",
     "table_index": 3
-  }
+  },
+  "catalog_version": "2.0.0",
+  "construct": "人际负性体验-人际归属感"
 }

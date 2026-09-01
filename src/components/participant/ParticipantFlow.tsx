@@ -98,7 +98,7 @@ function ScorePill({ score }: { score: number }) {
 export function ParticipantFlow({
   question,
   selected,
-  totalQuestions = 20,
+  totalQuestions = 19,
   response,
   setResponse,
   result,

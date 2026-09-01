@@ -21,6 +21,8 @@ MAX_SESSION_PROBES = 3
 # These are research-priority weights, not clinical risk weights. They must be
 # reviewed by the psychology team before being used as production policy.
 GROUP_PRIORITIES = {
+    "自我认知与绝望感": 0.90,
+    "情绪状态与人际联结": 0.84,
     "生存意愿与未来想象": 1.00,
     "人际负性体验": 0.88,
     "负性认知加工": 0.78,
@@ -36,9 +38,7 @@ RELATED_PAIRS = (
     ("Q02", "Q04", "interpersonal-context"),
     ("Q03", "Q05", "interpersonal-context"),
     ("Q03", "Q07", "support-seeking"),
-    ("Q03", "Q16", "survival-support"),
     ("Q05", "Q07", "support-seeking"),
-    ("Q05", "Q16", "survival-support"),
     ("Q06", "Q07", "support-seeking"),
     ("Q08", "Q09", "self-appraisal"),
     ("Q08", "Q10", "self-appraisal"),
@@ -47,10 +47,13 @@ RELATED_PAIRS = (
     ("Q10", "Q14", "self-appraisal"),
     ("Q12", "Q15", "coping-efficacy"),
     ("Q16", "Q17", "future-support"),
-    ("Q16", "Q18", "survival-support"),
-    ("Q16", "Q19", "survival-support"),
-    ("Q17", "Q18", "future-support"),
-    ("Q18", "Q19", "survival-response"),
+    ("Q16", "Q18", "future-support"),
+    ("Q17", "Q18", "survival-response"),
+    ("Q18", "Q19", "distress-impact"),
+)
+
+LEGACY_RELATED_PAIRS = (
+    ("Q03", "Q16", "interpersonal-future"),
 )
 
 CONFIRMATION_PROBES = {
@@ -69,11 +72,10 @@ CONFIRMATION_PROBES = {
     "Q13": "当消极想法再次出现时，你仍能按刚才的方式和它相处吗？",
     "Q14": "如果对方之后仍然冷淡，你还会按刚才的方式理解这件事吗？",
     "Q15": "如果事情继续超出掌控，你仍会处理自己能处理的部分吗？",
-    "Q16": "如果再想一次牵挂的意义，它仍然更接近刚才说的方向吗？",
-    "Q17": "如果把时间点换成更近的未来，你想到的画面仍有类似的内容和期待吗？",
-    "Q18": "如果危险情境换一个类似场景，你仍会先采取刚才说的行动吗？",
-    "Q19": "如果再想一遍那个瞬间，最先出现的感受仍然是刚才说的方向吗？",
-    "Q20": "如果只回想最近两周的整体状态，你仍会给出刚才这个 0 到 10 的数字吗？",
+    "Q16": "如果把时间点换成更近的未来，你想到的画面仍有类似的内容和期待吗？",
+    "Q17": "如果危险情境换一个类似场景，你仍会先采取刚才说的行动吗？",
+    "Q18": "如果再想一遍那个瞬间，最先出现的感受仍然是刚才说的方向吗？",
+    "Q19": "如果只回想最近两周的整体状态，你仍会给出刚才这个 0 到 10 的数字吗？",
 }
 
 SEMANTIC_GAP_REASONS = {
@@ -85,7 +87,7 @@ SEMANTIC_GAP_REASONS = {
 
 
 def _group(rubric: dict[str, Any] | None) -> str:
-    dimension = str((rubric or {}).get("dimension", "未分类"))
+    dimension = str((rubric or {}).get("construct") or (rubric or {}).get("dimension", "未分类"))
     return dimension.split("-", 1)[0].strip()
 
 
@@ -161,11 +163,11 @@ def _probe_interaction(question_id: str, probe_type: str, item: dict[str, Any]) 
     )
 
 
-def _related_signal(question_id: str, latest: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _related_signal(question_id: str, latest: dict[str, dict[str, Any]], related_pairs: tuple[tuple[str, str, str], ...] = RELATED_PAIRS) -> dict[str, Any]:
     support = 0
     conflict = 0
     links: list[dict[str, Any]] = []
-    for left, right, relation in RELATED_PAIRS:
+    for left, right, relation in related_pairs:
         if question_id not in {left, right}:
             continue
         other_id = right if question_id == left else left
@@ -225,6 +227,7 @@ def _action(
     latest: dict[str, dict[str, Any]],
     all_items: list[dict[str, Any]],
     current_question_id: str | None,
+    seed_total: int,
 ) -> dict[str, Any]:
     safety_items = [item for item in latest.values() if _is_safety(item)]
     if safety_items:
@@ -279,7 +282,7 @@ def _action(
                 "priority": top["priority"],
                 "rationale": "当前节点在会话证据图中优先级较高，先补充最小必要证据。" if current else "后续回答使此前暂缓的节点成为关键未决位置，现在回到该节点做一次最小求证。",
             }
-        if answered_seed < TOTAL_SEED_PROBES:
+        if answered_seed < seed_total:
             return {
                 "type": "DEFER_CLARIFICATION",
                 "question_id": top["question_id"],
@@ -314,7 +317,7 @@ def _action(
             "priority": review_node["priority"],
             "rationale": "该节点的自动评分仍存在不可消解的不确定性，交给专家复核。",
         }
-    if answered_seed < TOTAL_SEED_PROBES:
+    if answered_seed < seed_total:
         return {
             "type": "CONTINUE_SEED",
             "question_id": None,
@@ -338,12 +341,17 @@ def build_global_evidence_state(
     items: list[dict[str, Any]],
     rubrics: dict[str, dict[str, Any]],
     current_question_id: str | None = None,
+    seed_total: int | None = None,
 ) -> dict[str, Any]:
     latest = _latest_items(items)
     enriched_items = []
     nodes: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
     groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    related_pairs = RELATED_PAIRS
+    legacy_q16 = rubrics.get("Q16", {}).get("source_id") == "Q16"
+    if legacy_q16:
+        related_pairs = LEGACY_RELATED_PAIRS + RELATED_PAIRS
     for question_id in sorted(rubrics):
         rubric = rubrics[question_id]
         item = latest.get(question_id)
@@ -398,7 +406,7 @@ def build_global_evidence_state(
             }
             node["pending"] = _is_pending(item, items)
             node["probe_type"] = _infer_probe_type(score) if node["pending"] else None
-        signal = _related_signal(question_id, latest)
+        signal = _related_signal(question_id, latest, related_pairs)
         node["support_count"] = signal["support"]
         node["conflict_count"] = signal["conflict"]
         node["priority"] = _priority(node, signal) if node.get("pending") else 0.0
@@ -424,7 +432,8 @@ def build_global_evidence_state(
             "status": "UNANSWERED" if not answered else "NEEDS_REVIEW" if any(node["status"] in {"PROVISIONAL", "HUMAN_REVIEW"} for node in group_nodes) else "EVIDENCED",
         })
 
-    action = _action(nodes=nodes, latest=latest, all_items=items, current_question_id=current_question_id)
+    resolved_seed_total = int(seed_total or len(rubrics) or TOTAL_SEED_PROBES)
+    action = _action(nodes=nodes, latest=latest, all_items=items, current_question_id=current_question_id, seed_total=resolved_seed_total)
     unresolved = [
         {
             "question_id": node["question_id"],
@@ -444,7 +453,7 @@ def build_global_evidence_state(
     ]
     return {
         "version": ORCHESTRATOR_VERSION,
-        "seed_total": TOTAL_SEED_PROBES,
+        "seed_total": resolved_seed_total,
         "seed_answered": len({item["question_id"] for item in items if item.get("event_type") == "INITIAL"}),
         "probe_count": sum(1 for item in items if item.get("event_type") != "INITIAL"),
         "burden": {

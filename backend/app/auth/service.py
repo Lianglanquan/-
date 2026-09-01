@@ -92,9 +92,11 @@ class AuthService:
         self.session_ttl_seconds = session_ttl_seconds
         self.challenge_ttl_seconds = challenge_ttl_seconds
 
-    def register(self, email: str, password: str) -> dict[str, Any]:
+    def register(self, email: str, password: str, password_confirmation: str) -> dict[str, Any]:
         normalized = normalize_email(email)
         password = _validate_password(password)
+        if not isinstance(password_confirmation, str) or not hmac.compare_digest(password, password_confirmation):
+            raise AuthError("Passwords do not match")
         email_hash = _digest(normalized)
         if self.audit.find_user_by_email_hash(email_hash):
             raise AuthError("Unable to create account")
@@ -102,12 +104,11 @@ class AuthService:
         invitation = self.audit.consume_admin_invite(email_hash=email_hash, now=_iso(_now()))
         role = "ADMIN" if normalized in allowlist or invitation else "PARTICIPANT"
         user = self.audit.create_user(email=normalized, email_hash=email_hash, password_hash=hash_password(password), role=role)
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        self.audit.create_auth_challenge(
-            user_id=user["id"], email_hash=email_hash, purpose="VERIFY_EMAIL", code_hash=_digest(code), expires_at=_iso(_now() + timedelta(seconds=self.challenge_ttl_seconds))
-        )
-        self.mailer.send_verification_code(normalized, code)
-        return {**user, "verification_required": True}
+        self.audit.mark_user_verified(user["id"])
+        verified = self.audit.get_user(user["id"])
+        if not verified:
+            raise AuthError("Unable to create account")
+        return _public_user(verified)
 
     def verify_email(self, email: str, code: str) -> dict[str, Any]:
         normalized = normalize_email(email)

@@ -120,7 +120,7 @@ class CentroidScorer:
         rubric = self.rubrics.get(question_id, {})
         rubric_override = None
         if not gap:
-            if question_id == "Q20":
+            if question_id == "Q20" or rubric.get("source_id") == "Q20":
                 numeric = q20_numeric_values(response)
                 if len(numeric) == 1:
                     value = numeric[0]
@@ -139,7 +139,7 @@ class CentroidScorer:
         if gap:
             reasons.append(gap[0])
         if override_applied:
-            reasons.append("Q20_NUMERIC_RULE" if question_id == "Q20" else "RUBRIC_EXACT_MATCH")
+            reasons.append("Q20_NUMERIC_RULE" if question_id == "Q20" or rubric.get("source_id") == "Q20" else "RUBRIC_EXACT_MATCH")
         if uncertain:
             reasons.append("MODEL_UNCERTAINTY")
         sufficiency = "INSUFFICIENT" if gap else "SUFFICIENT"

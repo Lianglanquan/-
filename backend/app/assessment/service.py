@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.app.audit.store import AuditStore
 from backend.app.config import runtime_data_root
+from backend.app.scoring.catalog import ACTIVE_CATALOG_VERSION, catalog_for_session, load_catalog
 from backend.app.assessment.intelligence import SessionAIAdvisor, apply_ai_planning, build_participant_handoff
 from backend.app.assessment.orchestrator import build_global_evidence_state, infer_probe_type
 from backend.app.assessment.probes import default_cat_probe
@@ -30,6 +31,10 @@ class AssessmentStore:
         self.rubrics = rubrics
         self.scorer = scorer
         workspace = root or Path(__file__).resolve().parents[3]
+        self.root = workspace
+        self.catalog_version = ACTIVE_CATALOG_VERSION if len(rubrics) == 19 else "1.0.0"
+        self.seed_total = len(rubrics)
+        self.legacy_rubrics = load_catalog(workspace, "1.0.0").rubrics if self.catalog_version == ACTIVE_CATALOG_VERSION else rubrics
         if audit is not None:
             self.audit = audit
         else:
@@ -38,7 +43,20 @@ class AssessmentStore:
         self.ai_advisor = ai_advisor or SessionAIAdvisor(scorer)
 
     def start(self, user_id: str | None = None) -> dict[str, Any]:
-        return self.audit.create_session(user_id=user_id)
+        return self.audit.create_session(
+            user_id=user_id,
+            catalog_version=self.catalog_version,
+            seed_total=self.seed_total,
+        )
+
+    def _rubrics_for_session(self, session: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        if session is None:
+            return self.rubrics
+        return catalog_for_session(session, self.root).rubrics
+
+    def _seed_total_for_session(self, session: dict[str, Any] | None, rubrics: dict[str, dict[str, Any]]) -> int:
+        metadata = (session or {}).get("metadata") or {}
+        return int(metadata.get("seed_total") or len(rubrics) or self.seed_total)
 
     def _assert_access(self, session_id: str, user_id: str | None, *, allow_admin: bool = False) -> None:
         if not self.audit.session_exists(session_id):
@@ -142,6 +160,7 @@ class AssessmentStore:
     ) -> dict[str, Any]:
         self._assert_access(session_id, user_id, allow_admin=allow_admin)
         existing_session = self.audit.get_session(session_id)
+        session_rubrics = self._rubrics_for_session(existing_session)
         if existing_session and any(
             str((item.get("safety") or {}).get("state", "CLEAR")) != "CLEAR"
             for item in existing_session.get("items", [])
@@ -164,8 +183,9 @@ class AssessmentStore:
             before = self.audit.get_session(session_id)
             planned = build_global_evidence_state(
                 items=before["items"] if before else [],
-                rubrics=self.rubrics,
+                rubrics=session_rubrics,
                 current_question_id=question_id,
+                seed_total=self._seed_total_for_session(before, session_rubrics),
             )["next_action"]
             latest_score = (latest or {}).get("score") or {}
             if latest_score.get("score_status") not in {"PROVISIONAL", "HUMAN_REVIEW"}:
@@ -237,9 +257,9 @@ class AssessmentStore:
             result = ScoreResult.model_validate(latest_score)
             mode = "probe-paused"
         elif safety.state != "CLEAR":
-            result, mode = score_response(question_id, scoring_text, self.rubrics), "safety-gated"
+            result, mode = score_response(question_id, scoring_text, session_rubrics), "safety-gated"
         else:
-            result, mode = self._score(question_id, scoring_text)
+            result, mode = score_with_configured_provider(question_id, scoring_text, session_rubrics, self.scorer)
         result.safety_state = safety.state
         result.clarification_round = round_number
         result.probe_type = resolved_probe_type
@@ -279,17 +299,18 @@ class AssessmentStore:
         session = self._fold_adjudications(self.audit.get_session(session_id))
         deterministic_evidence = build_global_evidence_state(
             items=session["items"] if session else [],
-            rubrics=self.rubrics,
+            rubrics=session_rubrics,
             current_question_id=question_id,
+            seed_total=self._seed_total_for_session(session, session_rubrics),
         )
         ai_analysis = self.ai_advisor.advise(
             items=session["items"] if session else [],
-            rubrics=self.rubrics,
+            rubrics=session_rubrics,
             state=deepcopy(deterministic_evidence),
         )
         global_evidence = apply_ai_planning(deepcopy(deterministic_evidence), ai_analysis)
         participant_handoff = build_participant_handoff(global_evidence, ai_analysis)
-        admin_report = build_session_admin_report(session["items"] if session else [], seed_total=global_evidence.get("seed_total", 20))
+        admin_report = build_session_admin_report(session["items"] if session else [], seed_total=global_evidence.get("seed_total", len(session_rubrics)))
         decision_id = self.audit.append_session_decision(
             session_id=session_id,
             event_id=event_id,
@@ -361,13 +382,18 @@ class AssessmentStore:
         session = self.audit.get_session(session_id)
         if session is None:
             return None
+        session_rubrics = self._rubrics_for_session(session)
         session = self._fold_adjudications(session)
-        deterministic_evidence = build_global_evidence_state(items=session["items"], rubrics=self.rubrics)
+        deterministic_evidence = build_global_evidence_state(
+            items=session["items"],
+            rubrics=session_rubrics,
+            seed_total=self._seed_total_for_session(session, session_rubrics),
+        )
         cached_ai = (session.get("metadata") or {}).get("latest_ai_analysis")
         if isinstance(cached_ai, dict):
             ai_analysis = cached_ai
         else:
-            ai_analysis = self.ai_advisor.advise(items=session["items"], rubrics=self.rubrics, state=deepcopy(deterministic_evidence))
+            ai_analysis = self.ai_advisor.advise(items=session["items"], rubrics=session_rubrics, state=deepcopy(deterministic_evidence))
         global_evidence = apply_ai_planning(deepcopy(deterministic_evidence), ai_analysis)
         participant_handoff = (session.get("metadata") or {}).get("latest_participant_handoff")
         if not isinstance(participant_handoff, dict):
@@ -377,7 +403,7 @@ class AssessmentStore:
         session["session_intelligence"] = ai_analysis
         session["participant_handoff"] = participant_handoff
         if allow_admin:
-            session["admin_report"] = build_session_admin_report(session["items"], seed_total=global_evidence.get("seed_total", 20))
+            session["admin_report"] = build_session_admin_report(session["items"], seed_total=global_evidence.get("seed_total", len(session_rubrics)))
         else:
             # The participant may read their own evidence map, but the
             # administrator-only aggregate report must not travel through the

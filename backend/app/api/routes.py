@@ -20,7 +20,8 @@ from backend.app.auth.mailer import MailDeliveryError, ResendMailer
 from backend.app.auth.service import AuthError, AuthService
 from backend.app.config import load_local_env, runtime_data_root
 from backend.app.safety.engine import screen
-from backend.app.scoring.engine import evidence_gap, load_rubrics, score_response
+from backend.app.scoring.catalog import catalog_for_session, load_active_catalog
+from backend.app.scoring.engine import evidence_gap, load_active_rubrics, score_response
 from backend.app.scoring.llm import configured_scorer, score_with_configured_provider
 from backend.app.security import (
     SESSION_COOKIE,
@@ -32,7 +33,8 @@ from backend.app.security import (
 
 
 ROOT = Path(__file__).resolve().parents[3]
-RUBRICS = load_rubrics(ROOT)
+ACTIVE_CATALOG = load_active_catalog(ROOT)
+RUBRICS = ACTIVE_CATALOG.rubrics
 RUNTIME_DATA = runtime_data_root()
 AUDIT = AuditStore(RUNTIME_DATA / "audit.sqlite3")
 SCORER, SCORER_MODE = configured_scorer(RUBRICS)
@@ -44,6 +46,7 @@ router = APIRouter(prefix="/api")
 class RegisterRequest(BaseModel):
     email: str
     password: str
+    password_confirmation: str
 
 
 class VerifyEmailRequest(BaseModel):
@@ -51,8 +54,9 @@ class VerifyEmailRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6)
 
 
-class LoginRequest(RegisterRequest):
-    pass
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 class PasswordResetRequest(BaseModel):
@@ -76,7 +80,7 @@ class AdminInviteRequest(BaseModel):
 
 
 class ScoreRequest(BaseModel):
-    question_id: str = Field(pattern=r"^Q(?:0[1-9]|1[0-9]|20)$")
+    question_id: str = Field(pattern=r"^Q(?:0[1-9]|1[0-9])$")
     response: str = Field(min_length=1, max_length=5000)
 
     @field_validator("response")
@@ -110,7 +114,11 @@ class ReviewRequest(BaseModel):
 
 @router.get("/questions")
 def questions() -> list[dict[str, Any]]:
-    return [{"id": item_id, "question": data.get("question", ""), "dimension": data.get("dimension", ""), "criteria": data.get("criteria", [])} for item_id, data in sorted(RUBRICS.items())]
+    return [{"id": item_id, "question": data.get("question", ""), "dimension": data.get("dimension", ""), "construct": data.get("construct", ""), "criteria": data.get("criteria", [])} for item_id, data in sorted(RUBRICS.items())]
+
+
+def _session_rubrics(session: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return catalog_for_session(session, ROOT).rubrics
 
 
 def _auth_failure(exc: Exception) -> HTTPException:
@@ -119,12 +127,28 @@ def _auth_failure(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
+def _set_session_cookie(response: Response, token: str) -> None:
+    load_local_env()
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=os.getenv("AUTH_COOKIE_SECURE", "0").strip().lower() in {"1", "true", "yes"},
+        samesite="lax",
+        max_age=60 * 60 * 24 * 14,
+        path="/",
+    )
+
+
 @router.post("/auth/register")
-def register(request: RegisterRequest) -> dict[str, Any]:
+def register(request: RegisterRequest, response: Response) -> dict[str, Any]:
     try:
-        return AUTH.register(request.email, request.password)
+        AUTH.register(request.email, request.password, request.password_confirmation)
+        user, token = AUTH.login(request.email, request.password)
     except (AuthError, MailDeliveryError) as exc:
         raise _auth_failure(exc) from exc
+    _set_session_cookie(response, token)
+    return {"user": user}
 
 
 @router.post("/auth/verify-email")
@@ -150,16 +174,7 @@ def login(request: LoginRequest, response: Response) -> dict[str, Any]:
         user, token = AUTH.login(request.email, request.password)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    load_local_env()
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        secure=os.getenv("AUTH_COOKIE_SECURE", "0").strip().lower() in {"1", "true", "yes"},
-        samesite="lax",
-        max_age=60 * 60 * 24 * 14,
-        path="/",
-    )
+    _set_session_cookie(response, token)
     return {"user": user}
 
 
@@ -343,7 +358,7 @@ def admin_session_report(session_id: str, admin: dict[str, Any] = Depends(requir
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="assessment_report")
-    report = build_session_evidence_report(value, RUBRICS)
+    report = build_session_evidence_report(value, _session_rubrics(value))
     # Every unresolved node receives a stable session-scoped case id when an
     # administrator opens the report.  This makes the next step actionable
     # without exposing a separate, disconnected research queue.
@@ -358,19 +373,20 @@ def admin_session_report(session_id: str, admin: dict[str, Any] = Depends(requir
 def admin_session_review_case(session_id: str, question_id: str, admin: dict[str, Any] = Depends(require_admin_access)) -> dict[str, Any]:
     """Open one unresolved node in the context of its original session."""
 
-    if question_id not in RUBRICS:
-        raise HTTPException(status_code=404, detail="review node not found")
     try:
         value = STORE.get(session_id, allow_admin=True)
     except (KeyError, PermissionError) as exc:
         raise HTTPException(status_code=404, detail="assessment session not found") from exc
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
+    session_rubrics = _session_rubrics(value)
+    if question_id not in session_rubrics:
+        raise HTTPException(status_code=404, detail="review node not found")
     case = AUDIT.ensure_session_review_case(session_id, question_id)
     if case is None:
         raise HTTPException(status_code=404, detail="review node not found")
-    case["question"] = RUBRICS[question_id].get("question", "")
-    case["dimension"] = RUBRICS[question_id].get("dimension", "")
+    case["question"] = session_rubrics[question_id].get("question", "")
+    case["dimension"] = session_rubrics[question_id].get("dimension", "")
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=value.get("user_id"), session_id=session_id, action="READ", resource="session_review_case")
     return case
 
@@ -384,14 +400,15 @@ def adjudicate_admin_session_review(
 ) -> dict[str, Any]:
     """Save an expert decision and immediately rebuild the same report."""
 
-    if question_id not in RUBRICS:
-        raise HTTPException(status_code=404, detail="review node not found")
     try:
         value = STORE.get(session_id, allow_admin=True)
     except (KeyError, PermissionError) as exc:
         raise HTTPException(status_code=404, detail="assessment session not found") from exc
     if value is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
+    session_rubrics = _session_rubrics(value)
+    if question_id not in session_rubrics:
+        raise HTTPException(status_code=404, detail="review node not found")
     case = AUDIT.ensure_session_review_case(session_id, question_id)
     if case is None:
         raise HTTPException(status_code=404, detail="review node not found")
@@ -408,7 +425,7 @@ def adjudicate_admin_session_review(
     refreshed = STORE.get(session_id, allow_admin=True)
     if refreshed is None:
         raise HTTPException(status_code=404, detail="assessment session not found")
-    report = build_session_evidence_report(refreshed, RUBRICS)
+    report = build_session_evidence_report(refreshed, _session_rubrics(refreshed))
     AUDIT.record_admin_access(admin_user_id=admin["id"], target_user_id=refreshed.get("user_id"), session_id=session_id, action="ADJUDICATE", resource="session_review_case")
     return {"review": review, "session_id": session_id, "question_id": question_id, "report": report}
 

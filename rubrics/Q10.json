@@ -1,10 +1,10 @@
 {
   "id": "Q10",
   "source_id": "Q10",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "status": "source-extracted",
   "question": "看到别人轻松做到了我拼尽全力也做不好的事，我认为：______。",
-  "dimension": "负性认知加工-自我认知偏差",
+  "dimension": "自我认知与绝望感",
   "criteria": [
     {
       "score": 0,
@@ -50,5 +50,7 @@
   "provenance": {
     "source": "正式调研题项及评分细则(1).docx",
     "table_index": 9
-  }
+  },
+  "catalog_version": "2.0.0",
+  "construct": "负性认知加工-自我认知偏差"
 }

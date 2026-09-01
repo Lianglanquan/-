@@ -1,10 +1,10 @@
 {
   "id": "Q07",
   "source_id": "Q7",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "status": "source-extracted",
   "question": "跟身边的人聊起自己的困扰，对我来说是一件____的事情。",
-  "dimension": "情绪调节与应对效能-求助意愿",
+  "dimension": "情绪状态与人际联结",
   "criteria": [
     {
       "score": 0,
@@ -38,5 +38,7 @@
   "provenance": {
     "source": "正式调研题项及评分细则(1).docx",
     "table_index": 6
-  }
+  },
+  "catalog_version": "2.0.0",
+  "construct": "情绪调节与应对效能-求助意愿"
 }

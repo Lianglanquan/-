@@ -54,11 +54,29 @@ class AdminApiTest(unittest.TestCase):
         self.directory.cleanup()
 
     def _register(self, email: str, password: str = 'strong-pass') -> dict[str, object]:
-        response = self.client.post('/api/auth/register', json={'email': email, 'password': password})
+        response = self.client.post(
+            '/api/auth/register',
+            json={'email': email, 'password': password, 'password_confirmation': password},
+        )
         self.assertEqual(response.status_code, 200, response.text)
-        code = self.mailer.codes[email]
-        self.assertEqual(self.client.post('/api/auth/verify-email', json={'email': email, 'code': code}).status_code, 200)
-        return response.json()
+        return response.json()['user']
+
+    def test_registration_returns_authenticated_session_without_email_delivery(self) -> None:
+        response = self.client.post(
+            '/api/auth/register',
+            json={
+                'email': 'person@example.com',
+                'password': 'strong-pass',
+                'password_confirmation': 'strong-pass',
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.mailer.codes, {})
+        self.assertTrue(response.json()['user']['email_verified'])
+        self.assertIn('qz_session=', response.headers.get('set-cookie', ''))
+        me = self.client.get('/api/auth/me')
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertEqual(me.json()['user']['email'], 'person@example.com')
 
     def _login(self, email: str, password: str = 'strong-pass') -> None:
         response = self.client.post('/api/auth/login', json={'email': email, 'password': password})

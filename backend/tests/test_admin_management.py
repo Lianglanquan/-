@@ -40,10 +40,9 @@ class AdminManagementTest(unittest.TestCase):
         self.directory.cleanup()
 
     def _register(self, email: str, *, admin: bool) -> dict[str, object]:
-        user = self.auth.register(email, 'strong-pass')
+        user = self.auth.register(email, 'strong-pass', 'strong-pass')
         if admin:
             self.audit.update_user_role(user['id'], 'ADMIN')
-        self.auth.verify_email(email, self.mailer.codes[email])
         return self.audit.get_user(user['id']) or {}
 
     def test_admin_can_promote_and_demote_but_last_admin_is_protected(self) -> None:
@@ -59,7 +58,7 @@ class AdminManagementTest(unittest.TestCase):
     def test_invited_email_becomes_admin_after_registration(self) -> None:
         invite = self.auth.admin_invite(self.admin['id'], 'new-admin@example.com')
         self.assertEqual(invite['email'], 'new-admin@example.com')
-        registered = self.auth.register('NEW-ADMIN@example.com', 'strong-pass')
+        registered = self.auth.register('NEW-ADMIN@example.com', 'strong-pass', 'strong-pass')
         self.assertEqual(registered['role'], 'ADMIN')
         self.assertTrue(self.audit.invitation_consumed('new-admin@example.com'))
 

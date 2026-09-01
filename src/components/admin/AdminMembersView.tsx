@@ -50,7 +50,7 @@ export default function AdminMembersView({ members, currentUserId, loading, mess
     <h2>把谁带进这间房间</h2>
     <p className="view-intro">管理员可以一起看见完整评估，也可以自己回到“继续”里作为测试人员走完一场会话。</p>
     <section className="members-invite-card">
-      <div><span className="box-kicker">预授权管理员邮箱</span><p>对方注册并完成邮箱验证后，会自动拥有管理员权限；密码仍由对方自己设置。</p></div>
+      <div><span className="box-kicker">预授权管理员邮箱</span><p>对方使用这个邮箱注册后，会自动拥有管理员权限；密码仍由对方自己设置。</p></div>
       <form onSubmit={submitInvite}><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="teammate@example.com" required /><button className="secondary-button" type="submit" disabled={inviteLoading}>{inviteLoading ? '保存中…' : '预授权邮箱 →'}</button></form>
     </section>
     <div className="members-toolbar"><span className="box-kicker">成员 {members.length}</span><button className="ghost-button" type="button" onClick={() => void onRefresh()} disabled={loading}>{loading ? '读取中…' : '刷新列表 ↻'}</button></div>

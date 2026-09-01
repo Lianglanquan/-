@@ -19,7 +19,7 @@ def test_admin_workspace_contract_has_overview_report_and_non_destructive_sync()
     assert 'visibilitychange' in app
     assert '正在同步' in sessions
     assert '上一份内容仍保留' in sessions
-    for label in ('证据地图', '20题证据矩阵', '评估路径'):
+    for label in ('证据地图', '证据矩阵', '评估路径'):
         assert label in sessions
     assert '干预建议' not in sessions
     assert '评估总览' in overview

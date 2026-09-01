@@ -97,29 +97,30 @@ _PACKS: dict[str, list[dict[str, str]]] = {
         {"id": "stop", "label": "我会觉得做什么都没有用"},
     ],
     "Q16": [
-        {"id": "support", "label": "它更像一份把我和别人连在一起的牵挂"},
-        {"id": "burden", "label": "它更像一份让我感到压力的牵挂"},
-        {"id": "mixed", "label": "这两种感觉会一起出现"},
-    ],
-    "Q17": [
         {"id": "concrete_future", "label": "我能想到一个具体的生活画面"},
         {"id": "blank_future", "label": "我脑子里还是很空"},
         {"id": "uncertain_future", "label": "有一点画面，但还不确定"},
     ],
-    "Q18": [
+    "Q17": [
         {"id": "protect", "label": "我会先保护自己和身边的人"},
         {"id": "freeze", "label": "我可能会先愣住或不知所措"},
         {"id": "call_help", "label": "我会先找人或寻找帮助"},
     ],
-    "Q19": [
+    "Q18": [
         {"id": "fear", "label": "最先冒出来的是害怕"},
         {"id": "attachment", "label": "最先想到的是舍不得"},
         {"id": "blank", "label": "最先出现的可能是一片空白"},
     ],
-    "Q20": [
+    "Q19": [
         {"id": "low_impact", "label": "我能想到一个比较轻的程度"},
         {"id": "high_impact", "label": "我能想到一个很重的程度"},
         {"id": "no_number", "label": "我还没有一个数字，想先说说影响在哪里"},
+    ],
+    # Immutable legacy-v1 compatibility. Active catalog uses this question as Q19.
+    "Q20": [
+        {"id": "low_impact", "label": "我想到的是比较轻的影响"},
+        {"id": "mid_impact", "label": "我想到的是中间程度的影响"},
+        {"id": "high_impact", "label": "我想到的是比较重的影响"},
     ],
 }
 
@@ -133,8 +134,6 @@ def _quote(response: str) -> str:
 
 def _gap_sentence(target_gap: str | None, question_id: str) -> str:
     gap = str(target_gap or "")
-    if question_id == "Q16":
-        return "它听起来很有分量，只是我还不确定，这份分量是在托住你，还是也让你有些累。"
     if "方向" in gap or "正负" in gap:
         return "我听见了一个方向，只是它还没有完全显出是靠近、远离，还是两种感觉一起在。"
     if "对象" in gap or "谁" in gap:

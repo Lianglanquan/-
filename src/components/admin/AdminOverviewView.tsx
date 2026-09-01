@@ -101,7 +101,7 @@ export default function AdminOverviewView({ overview, loading, syncing, message,
         <div className="admin-recent-list">
           {recent.slice(0, 7).map((session) => {
             const evidence = session.metadata?.latest_global_evidence as Record<string, unknown> | undefined
-            return <button type="button" key={session.id} onClick={() => onOpenSession(session.id)}><div><strong>{session.email || '未关联邮箱'}</strong><span>{statusLabel(session.status)}</span></div><small>{Number(evidence?.seed_answered ?? 0)} / {Number(evidence?.seed_total ?? 20)} 题 · {formatDate(session.updated_at)}</small></button>
+            return <button type="button" key={session.id} onClick={() => onOpenSession(session.id)}><div><strong>{session.email || '未关联邮箱'}</strong><span>{statusLabel(session.status)}</span></div><small>{Number(evidence?.seed_answered ?? 0)} / {Number(evidence?.seed_total ?? 19)} 题 · {formatDate(session.updated_at)}</small></button>
           })}
           {!recent.length && <div className="admin-calm-empty compact"><strong>还没有评估会话</strong></div>}
         </div>

@@ -45,39 +45,40 @@ class AuthServiceTest(unittest.TestCase):
         self.assertFalse(verify_password("wrong password", first))
 
     def test_register_normalizes_email_and_assigns_admin_from_allowlist(self) -> None:
-        admin = self.auth.register(" Owner@Example.com ", "a-strong-password")
-        participant = self.auth.register("person@example.com", "another-strong-password")
+        admin = self.auth.register(" Owner@Example.com ", "a-strong-password", "a-strong-password")
+        participant = self.auth.register("person@example.com", "another-strong-password", "another-strong-password")
 
         self.assertEqual(admin["email"], "owner@example.com")
         self.assertEqual(admin["role"], "ADMIN")
         self.assertEqual(participant["role"], "PARTICIPANT")
-        self.assertEqual(self.mailer.verification_codes["owner@example.com"].__len__(), 6)
+        self.assertTrue(admin["email_verified"])
+        self.assertTrue(participant["email_verified"])
+        self.assertEqual(self.mailer.verification_codes, {})
 
-    def test_verification_is_single_use_and_login_creates_revocable_session(self) -> None:
-        registered = self.auth.register("person@example.com", "another-strong-password")
-        code = self.mailer.verification_codes[registered["email"]]
-        verified = self.auth.verify_email(registered["email"], code)
-        self.assertEqual(verified["email"], "person@example.com")
-        with self.assertRaises(AuthError):
-            self.auth.verify_email(registered["email"], code)
+    def test_register_rejects_mismatched_password_confirmation(self) -> None:
+        with self.assertRaisesRegex(AuthError, "Passwords do not match"):
+            self.auth.register("person@example.com", "another-strong-password", "different-password")
 
+    def test_registration_creates_an_immediately_loginable_user_and_revocable_session(self) -> None:
+        registered = self.auth.register("person@example.com", "another-strong-password", "another-strong-password")
         user, token = self.auth.login("PERSON@example.com", "another-strong-password")
         self.assertEqual(user["id"], registered["id"])
         self.assertEqual(self.auth.current_user(token)["id"], registered["id"])
         self.auth.logout(token)
         self.assertIsNone(self.auth.current_user(token))
 
-    def test_unverified_or_wrong_password_does_not_create_session(self) -> None:
-        registered = self.auth.register("person@example.com", "another-strong-password")
-        with self.assertRaises(AuthError):
-            self.auth.login(registered["email"], "another-strong-password")
+    def test_wrong_password_does_not_create_session(self) -> None:
+        registered = self.auth.register("person@example.com", "another-strong-password", "another-strong-password")
+        user, token = self.auth.login(registered["email"], "another-strong-password")
+        self.assertEqual(user["id"], registered["id"])
+        self.auth.logout(token)
         with self.assertRaises(AuthError):
             self.auth.login(registered["email"], "wrong-password")
 
     def test_duplicate_registration_has_generic_auth_error(self) -> None:
-        self.auth.register("person@example.com", "another-strong-password")
+        self.auth.register("person@example.com", "another-strong-password", "another-strong-password")
         with self.assertRaises(AuthError) as context:
-            self.auth.register("PERSON@example.com", "another-strong-password")
+            self.auth.register("PERSON@example.com", "another-strong-password", "another-strong-password")
         self.assertEqual(str(context.exception), "Unable to create account")
 
 

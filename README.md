@@ -56,7 +56,7 @@ npm run build
 .venv/bin/python scripts/train_centroid.py
 ```
 
-`scripts/build_dataset.py` reads the unchanged files in `data/raw/`, writes canonical records to `data/derived/`, and uses participant-level deterministic splits. `scripts/train_centroid.py` trains only on the participant-locked train split and writes the model/report artifacts. Runtime sessions and expert decisions are persisted in `data/derived/audit.sqlite3`; `legacy_score` and `legacy_rationale` remain historical annotations, while `adjudicated_score` and `evidence_sufficiency` are separate review fields.
+`scripts/build_dataset.py` reads the unchanged files in `data/raw/`, writes canonical records to `data/derived/`, and uses participant-level deterministic splits. `scripts/train_centroid.py` trains only on the participant-locked train split and writes the model/report artifacts. Runtime accounts, salted password hashes, server-side auth sessions, assessment sessions, and expert decisions are persisted in `data/derived/audit.sqlite3` (or the server path configured by `QIUZHENG_DATA_ROOT`); plaintext passwords and password confirmations are never stored. `legacy_score` and `legacy_rationale` remain historical annotations, while `adjudicated_score` and `evidence_sufficiency` are separate review fields.
 
 For the anonymous real-survey answer workbook used in local smoke tests, run:
 

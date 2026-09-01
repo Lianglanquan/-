@@ -161,15 +161,22 @@ class AuditStore:
             if "adjudicated_score" not in columns:
                 connection.execute("ALTER TABLE review_cases ADD COLUMN adjudicated_score INTEGER")
 
-    def create_session(self, user_id: str | None = None) -> dict[str, Any]:
+    def create_session(
+        self,
+        user_id: str | None = None,
+        *,
+        catalog_version: str = "2.0.0",
+        seed_total: int = 19,
+    ) -> dict[str, Any]:
         session_id = uuid.uuid4().hex
         now = utc_now()
+        metadata = {"catalog_version": catalog_version, "seed_total": int(seed_total)}
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO sessions(id, user_id, created_at, updated_at, status) VALUES (?, ?, ?, ?, ?)",
-                (session_id, user_id, now, now, "IN_PROGRESS"),
+                "INSERT INTO sessions(id, user_id, created_at, updated_at, status, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, user_id, now, now, "IN_PROGRESS", json.dumps(metadata, ensure_ascii=False)),
             )
-        return {"id": session_id, "user_id": user_id, "created_at": now, "updated_at": now, "status": "IN_PROGRESS", "items": []}
+        return {"id": session_id, "user_id": user_id, "created_at": now, "updated_at": now, "status": "IN_PROGRESS", "metadata": metadata, "items": []}
 
     def session_belongs_to_user(self, session_id: str, user_id: str) -> bool:
         with self._connect() as connection:
